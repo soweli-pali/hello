@@ -55,6 +55,8 @@ export const BLOCKS: Record<string, BlockType> = {
 };
 export const FIRE_MS = 4 * 3600_000;
 export const COMMON = new Set(['stone', 'wood', 'clay', 'sand', 'fiber', 'food']); // what every body knows the uses of
+export const BASIC = new Set(['pick', 'waterskin', 'cloak']); // recipes everyone knows: the basics of getting by
+export const MAX_TRY = 10; // amounts in a trial run from 1 to this
 export const WINDED_MS = 60_000; // after striking a person, a body can't strike anyone for a minute
 export const DYES: Record<string, string> = { ochre: '#b5532f', indigo: '#2f408c', shell: '#f2eadd' };
 function hexMix(cols: string[]) {
@@ -261,6 +263,7 @@ export class World {
       }
       case 'notice': ag!.noticed = e.v; break;
       case 'learn': ag!.knows!.add(e.what); break;
+      case 'tinker': for (const [m, n] of Object.entries((e.spent ?? {}) as Record<string, number>)) ag!.mats[m] -= n; break;
       case 'hurt': ag!.lastBite = e.cause === 'wolf' ? e.t : ag!.lastBite; break;
       case 'tame': { const an = this.fauna.byId.get(e.animal)!; an.tamedBy = e.a!; ag!.mats.food -= 1; break; }
       case 'die': {
@@ -523,7 +526,9 @@ export class World {
   }
 
   // ---------- knowledge: what a body knows how to make ----------
-  knowsRecipe(a: Agent, r: string) { return !a.discovers || a.knows!.has('recipe:' + r); }
+  knowsRecipe(a: Agent, r: string) { return !a.discovers || BASIC.has(r) || r === this.birthRecipe(a) || a.knows!.has('recipe:' + r); }
+  // every newcomer arrives knowing one recipe beyond the basics, which one depending on who they are
+  birthRecipe(a: Agent) { const rest = Object.keys(RECIPES).filter(r => !BASIC.has(r)); let h = 0; for (const c of a.name) h = (Math.imul(h, 31) + c.charCodeAt(0)) | 0; return rest[Math.floor(hash(h, 91, this.cfg.seed) * rest.length)]; }
   // plain blocks (from common materials) everyone knows; a fine one becomes clear once you hold what it needs
   knowsBlock(a: Agent, b: string) {
     const bt = BLOCKS[b]; if (!bt) return false;
@@ -765,18 +770,27 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   craft: {
-    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. Newcomers know no recipes: you can learn one by examining a tool (inspect it), by watching someone make one, or by trying a combination of materials you carry with {"with": {"wood": 2, "stone": 1}}. look {"detail":2} lists the recipes you know. 3 AP.`,
+    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. Everyone knows a few basic recipes and one more of their own; others are learned by examining a tool (inspect it), by watching someone make one, or by research: trying materials you carry with {"with": {"wood": 2, "stone": 1}}. A try works only with exactly a recipe's materials in exactly its amounts (never more than ${MAX_TRY} of anything). A failed try spoils the common materials in it; rare materials are never lost, but trying with them takes a full bar of AP. look {"detail":2} lists the recipes you know. 3 AP.`,
     args: { recipe: 'a recipe you know', with: 'or materials to try combining, e.g. {"wood":2,"stone":1}' },
     run: (w, a, x) => {
       let name = String(x.recipe ?? '').toLowerCase(), invented = false;
       if (!name && x.with && typeof x.with === 'object') {
-        const tried = Object.fromEntries(Object.entries(x.with as Record<string, unknown>).map(([m, n]) => [String(m).toLowerCase(), Math.max(0, Math.trunc(Number(n) || 0))]).filter(([, n]) => (n as number) > 0)) as Record<string, number>;
+        const tried = Object.fromEntries(Object.entries(x.with as Record<string, unknown>).map(([m, n]) => [String(m).toLowerCase(), Math.trunc(Number(n) || 0)]).filter(([, n]) => (n as number) > 0)) as Record<string, number>;
+        if (!Object.keys(tried).length) throw new Error('Say which materials to try, e.g. {"with": {"wood": 2, "stone": 1}}.');
+        if (Object.values(tried).some(n => n > MAX_TRY)) throw new Error(`Recipes never need more than ${MAX_TRY} of anything.`);
         const short = Object.entries(tried).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} more ${m}`);
         if (short.length) throw new Error(`You don't have that: you'd need ${short.join(', ')}.`);
-        w.need(a, 3);
-        // it works if what you try is exactly a recipe's materials in at least its amounts, and nothing else
-        const hit = Object.entries(RECIPES).find(([, r]) => Object.keys(r.needs).length === Object.keys(tried).length && Object.entries(r.needs).every(([m, n]) => (tried[m] ?? 0) >= n!));
-        if (!hit) { w.emit('tinker', a.id, { with: tried, cost: 3 }); return { ok: true, text: 'You turn the materials over and try to fit them together, but nothing comes of it.' }; }
+        // research: it works only with exactly a recipe's materials in exactly its amounts
+        const hit = Object.entries(RECIPES).find(([, r]) => Object.keys(r.needs).length === Object.keys(tried).length && Object.entries(r.needs).every(([m, n]) => tried[m] === n));
+        const rare = Object.keys(tried).some(m => !COMMON.has(m));
+        if (!hit) {
+          // a failed try uses up common materials; rare ones are never lost, but working with them takes a full bar of care
+          const cost = rare ? w.cfg.apMax : 3; w.need(a, cost);
+          const spent = Object.fromEntries(Object.entries(tried).filter(([m]) => COMMON.has(m)));
+          w.emit('tinker', a.id, { with: tried, spent, cost });
+          return { ok: true, text: `You try to fit ${fmtMats(tried)} together, but nothing comes of it.${Object.keys(spent).length ? ` The ${Object.keys(spent).join(' and ')} ${Object.keys(spent).length > 1 ? 'are' : 'is'} spoiled.` : ''}${rare ? ' The rarer things survive the attempt.' : ''}` };
+        }
+        w.need(a, rare ? w.cfg.apMax : 3);
         name = hit[0]; invented = !w.knowsRecipe(a, name);
         if (invented) w.learn(a, 'recipe:' + name);
       } else if (!RECIPES[name] || !w.knowsRecipe(a, name)) {
@@ -788,7 +802,7 @@ export const VERBS: Record<string, Verb> = {
         w.need(a, 3);
       }
       const r = RECIPES[name], id = 'i' + (w.seq + 1);
-      w.emit('craft', a.id, { id, kind: 'tool', title: name, body: r.does, hash: sha(name), needs: r.needs, cost: 3 });
+      w.emit('craft', a.id, { id, kind: 'tool', title: name, body: r.does, hash: sha(name), needs: r.needs, cost: x.with && !x.recipe && Object.keys(r.needs).some(m => !COMMON.has(m)) ? w.cfg.apMax : 3 });
       // anyone watching learns how it's done
       for (const o of w.agents.values()) if (o.id !== a.id && o.state === 'active' && w.dist(o.x, o.y, a.x, a.y) <= w.sight(o) && !w.knowsRecipe(o, name)) w.learn(o, 'recipe:' + name);
       return { ok: true, text: `${invented ? `It works! You've found how to make a ${name}. ` : ''}You crafted a ${name} (#${id}): ${r.does}.`, data: { id } };
@@ -974,7 +988,7 @@ export function rulesText(cfg: Config) {
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
     `- Building needs only materials, no tools. A closed room (walls and doors all round, with a roof over every tile inside) is shelter: wolves can't reach you there, and you recover vigor three times as fast. By a burning campfire you recover twice as fast and wolves keep away.`,
     `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks take two to lift.`,
-    ...(cfg.discovery ? [`- Nobody arrives knowing how to make tools. You learn a recipe by examining a tool, by watching someone make one, or by trying combinations of materials yourself. Blocks from common materials everyone knows; finer ones become clear once you hold what they need.`] : []),
+    ...(cfg.discovery ? [`- Everyone arrives knowing a few basic tool recipes and one more of their own. Others are learned: by examining a tool, by watching someone make one, or by research (trying exact combinations of materials; failed tries spoil common materials, never rare ones). Blocks from common materials everyone knows; finer ones become clear once you hold what they need.`] : []),
     `- There is no quick way to travel: every tile is walked (or swum, or sailed). Wherever you are, you have to get back on your own feet.`,
     `- You don't know coordinates unless you carry the right tool. Directions are relative: N is up, E is right.`,
     cfg.dayMin === 1440 ? `- Days follow real time in UTC: morning from ${utcHour(cfg, 0)}, midday from ${utcHour(cfg, 0.25)}, evening from ${utcHour(cfg, 0.5)}, night from ${utcHour(cfg, 0.75)} until dawn. At night you see less, and wolves roam.`

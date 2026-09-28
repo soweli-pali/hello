@@ -243,25 +243,29 @@ test('fights are slow: strikers are winded; news is told once', () => {
   assert.doesNotMatch(w.act(b, 'look', {}).text, /News about/, 'newcomers already know');
 });
 
-test('discovery: recipes and fine blocks are learned, not given', () => {
+test('discovery: basics, one recipe of your own, research, watching, examining', () => {
   const w = new World(':memory:', { w: 256, h: 256 });
   const [x, y] = w.geo.landing();
   const a = w.agents.get(w.join('Ann', {}, [x, y]).id)!, b = w.agents.get(w.join('Bob', {}, [x + 1, y]).id)!;
   const intro = rulesText(w.cfg);
   for (const secret of ['spear', 'compass', 'marble', 'ochre', 'waterskin']) assert.doesNotMatch(intro + VERBS.place.help + VERBS.craft.help, new RegExp(secret), `${secret} stays secret`);
-  a.mats = { wood: 5, stone: 5 };
-  assert.match(w.act(a, 'craft', { recipe: 'spear' }).text, /don't know/);
-  assert.match(w.act(a, 'craft', { with: { wood: 1 } }).text, /nothing comes of it/);
-  const r = w.act(a, 'craft', { with: { wood: 2, stone: 1 } });
-  assert.match(r.text, /found how to make a spear/);
-  assert.ok(w.knowsRecipe(b, 'spear'), 'Bob watched');
-  assert.ok(w.act(a, 'craft', { recipe: 'spear' }).ok, 'now known by name');
-  assert.match(w.act(a, 'look', { detail: 2 }).text, /Recipes you know: spear/);
-  // fine blocks: unknown until you hold what they need; plain ones known
-  assert.ok(w.knowsBlock(a, 'plank'));
-  assert.equal(w.knowsBlock(a, 'marble'), false);
+  assert.ok(w.knowsRecipe(a, 'pick') && w.knowsRecipe(a, 'cloak'), 'the basics are known');
+  const own = w.birthRecipe(a); assert.ok(w.knowsRecipe(a, own), 'and one of their own');
+  const target = ['spear', 'boat', 'cart'].find(r => r !== own && r !== w.birthRecipe(b))!;
+  const needs = { spear: { wood: 2, stone: 1 }, boat: { wood: 10, fiber: 4 }, cart: { wood: 8, ore: 2 } }[target as 'spear']!;
+  a.mats = { wood: 30, stone: 30, fiber: 30, ore: 5 };
+  assert.match(w.act(a, 'craft', { recipe: target }).text, /don't know/);
+  // a near miss spoils common materials but never rare ones
+  const wrong = Object.fromEntries(Object.entries(needs).map(([m, n]) => [m, n === 10 ? 9 : n + 1]));
+  const before = { ...a.mats };
+  assert.match(w.act(a, 'craft', { with: wrong }).text, /nothing comes of it/);
+  for (const [m, n] of Object.entries(wrong)) assert.equal(a.mats[m], ['ore'].includes(m) ? before[m] : before[m] - n);
+  assert.match(w.act(a, 'craft', { with: { wood: 11 } }).text, /never need more than 10/);
+  t: { const r = w.act(a, 'craft', { with: needs }); assert.match(r.text, new RegExp(`found how to make a ${target}`)); }
+  assert.ok(w.knowsRecipe(b, target), 'Bob watched');
+  assert.match(w.act(a, 'look', { detail: 2 }).text, new RegExp(`Recipes you know:.*${target}`));
+  assert.ok(w.knowsBlock(a, 'plank')); assert.equal(w.knowsBlock(a, 'marble'), false);
   a.mats.marble = 1; assert.ok(w.knowsBlock(a, 'marble'));
-  // bodies from before discovery know everything
   const old = w.agents.get(w.join('Old', {}, [x, y + 1]).id)!; old.discovers = false;
-  assert.ok(w.knowsRecipe(old, 'compass'));
+  assert.ok(w.knowsRecipe(old, 'compass'), 'bodies from before discovery know everything');
 });

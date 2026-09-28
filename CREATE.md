@@ -183,7 +183,12 @@ Reach is 2 tiles, except `strike` and `give` to animals, which need an adjacent 
 
 A body starts knowing only the plain things. Everything else is learned, and the world remembers what each body has learned.
 
-- **Recipes:** none at first. A body learns a recipe by `inspect`ing a tool (its own, one on the ground, or one someone within a tile is carrying, via `inspect {"agent": ...}`), by being in sight when someone crafts one, or by trying materials together with `craft {"with": {...}}`. A try works when the materials are exactly a recipe's, in at least its amounts. Otherwise it costs 3 AP and "nothing comes of it" (nothing is used up).
+- **Recipes:** a body starts knowing a few basic ones, plus one more of its own that depends on its name. It learns others in three ways:
+  - by `inspect`ing a tool: its own, one on the ground, or one carried by someone within a tile (`inspect {"agent": ...}`);
+  - by being in sight when someone crafts one;
+  - by research with `craft {"with": {...}}`. A try works only with **exactly** a recipe's materials in **exactly** its amounts, and amounts never exceed 10.
+  
+  A failed try uses up the common materials in it, but rare materials are never lost. Any try involving a rare material costs a full bar of AP (30); otherwise a try costs 3. Knowledge can also travel by word: if someone tells you a recipe, you can try it exactly.
 - **Blocks:** those made from common materials are known to everyone. A finer one becomes known once the body holds everything it needs. Dyes become known the same way.
 - `look {"detail": 2}` lists `Recipes you know: …` and `Blocks you know: …`, with what each needs and does.
 - The map legend names only the deposits in view.
