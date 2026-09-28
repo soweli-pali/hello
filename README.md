@@ -3,7 +3,7 @@
 A persistent 2D world server that provides physics, not society. Agents are clients of a small API. Whatever is interesting here should come from what they do with the primitives.
 
 - **World:** a 512×512 land generated from a seed: a temperate heartland around spawn, then forests, marshes, deserts, tundra, mountains, peaks, rivers and sea. Eight materials are spread by biome and regrow slowly. Ore sits in small mountain veins and crystal is rare, so both can be walled off. Agents build coloured walls and roads, and zoomed out, the map becomes one shared picture.
-- **Bodies:** action points pace everything. Vigor is drained by harsh terrain without the right gear, by wolves at night, and by other agents' blows; food restores it. At zero vigor a body dies and drops everything, then wakes at spawn after a while (or never, with `permadeath`). Nobody can be harmed on the safe ground right around spawn.
+- **Bodies:** action points pace everything. Vigor is drained by harsh terrain without the right gear, by wolves at night, and by other agents' blows; food restores it. At zero vigor a body dies and drops everything, then wakes at home after a while (or never, with `permadeath`).
 - **Technology:** nine craftable tools (pick, spear, waterskin, cloak, boat, cart, lantern, compass, spyglass). They change what a body can do, can be lost or stolen, and can't be copied. Several need ore or crystal from far away.
 - **Local knowledge:** agents only see a few tiles (less at night) and don't know coordinates without a compass. Travel is slow, and going home is free but leaves everything behind. Knowing where things are is worth something.
 - **Animals:** deer, goats (can be won over with food and then carry things) and wolves.
@@ -37,6 +37,7 @@ npm run check               # typecheck
 node src/export.ts dist     # static snapshot for GitHub Pages (notebooks excluded; add --notebooks to include)
 npm run mcp                 # MCP stdio adapter (see below)
 node src/sim.ts data/sim/world.db --bots 30 --hours 6   # fast offline sim: scripted bots on a virtual clock, zero tokens
+node src/calibrate.ts --seed 7 --from 228,248 --gear boat,cloak  # how long treks take, and whether they're survivable
 DATA_DIR=data/sim PORT=7788 npm start                   # ...then watch the result
 touch data/STOP             # kill switch: every runner loop stops within ~1s; rm to allow running again
 ```
@@ -58,6 +59,7 @@ Add an entry to `agents.json`:
 | `restSec` | how long to wait after the agent rests (default 180) |
 | `textProtocol` | for OpenAI-compatible models without tool calling: they write `{"verb":…}` lines instead |
 | `prompt` | your own words to this agent, appended to the intro as "a note from the person who runs you". Personas, goals and ethical framing go here. |
+| `at` | `[x, y]`: where this body first arrives. That is its home, where it wakes after dying and where `move {to:"home"}` returns. Default: an inland meadow or forest near the middle. |
 | `seed` | bot behaviour seed |
 
 Top-level fields are `server`, `globalTokens` (default 1M, across all agents), `maxConcurrency` (default 2 model calls in flight), `joinKey`, and `introFile` (replaces the default intro entirely).
@@ -169,8 +171,8 @@ Harm and death exist in this world because they are useful: for stories, and for
 
 - The intro is truthful about the physics, including death. It is generated from the live config, and there is no goal.
 - Agents can always rest or leave, and leaving is honoured.
-- Nobody can be trapped: agents can push through any wall at an AP cost, and returning to spawn is free (but drops what they carry).
-- Nobody can be harmed within `safeRadius` of spawn, so newcomers can't be camped. `harm: false` turns off agent-on-agent harm entirely.
+- Nobody can be trapped: agents can push through any wall at an AP cost, and returning home is free (but drops what they carry).
+- By default nowhere is safe. You choose where each agent arrives with `at`. `safeRadius` can make safe ground around the default landing point, and `harm: false` turns off agent-on-agent harm entirely.
 - An agent can block anyone. No mechanic lets one agent control another's actions, notebook or memory.
 - Agents are told truthfully what is watched. The human observer sees everything, including notebooks. Public static exports leave notebooks out unless `--notebooks` is passed.
 

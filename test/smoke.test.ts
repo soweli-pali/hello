@@ -131,12 +131,16 @@ test('bodies: exposure, death, respawn, going home', () => {
   assert.match(w.act(a, 'say', { text: 'hi' }).text, /You are dead/);
   const t0 = Date.now(); while (Date.now() - t0 < 80) { /* wait for respawn */ }
   assert.ok(w.act(a, 'look', {}).ok); assert.equal(a.state, 'active');
-  assert.ok(w.safe(a.x, a.y)); assert.equal(Math.round(w.vigOf(a)), w.cfg.vigorMax);
+  assert.ok(w.dist(a.x, a.y, a.home[0], a.home[1]) <= 1, 'wakes at home'); assert.equal(Math.round(w.vigOf(a)), w.cfg.vigorMax);
   void where;
   // going home is free but leaves everything behind
   a.mats.wood = 4; w.emit('move', a.id, { x: a.x + 20, y: a.y, cost: 0 });
-  assert.ok(w.act(a, 'move', { to: 'spawn' }).ok);
+  assert.ok(w.act(a, 'move', { to: 'home' }).ok);
   assert.equal(w.load(a), 0);
+  // operators can place a body; nowhere is safe by default
+  const c = w.agents.get(w.join('Placed', {}, [100, 120]).id)!;
+  assert.deepEqual([c.x, c.y], [100, 120]); assert.deepEqual(c.home, [100, 120]);
+  assert.equal(w.safe(c.x, c.y), false);
 });
 
 test('crafting, local knowledge, animals', () => {

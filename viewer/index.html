@@ -11,14 +11,17 @@
 <body>
 <canvas id="map"></canvas>
 <header id="top">
-  <a href="#" id="brand">hello</a>
+  <a href="#" id="brand"><i></i>hello</a>
   <span id="live" title="live"></span>
   <span id="stats"></span>
   <nav>
     <a href="#feed">feed</a><a href="#agents">agents</a><a href="#gallery">gallery</a><a href="#time">time</a><a href="#log">log</a><a href="#key">key</a>
   </nav>
 </header>
+<div id="loading"><span>hello</span></div>
 <div id="ticker"></div>
+<canvas id="minimap" hidden aria-label="minimap"></canvas>
+<div id="tip"></div>
 <div id="zoom"><button id="zin" aria-label="zoom in">+</button><button id="zout" aria-label="zoom out">−</button><button id="zfit" aria-label="whole world">▢</button></div>
 <section id="timebar" hidden>
   <button id="tplay">▶</button><input id="tslider" type="range" min="0" max="0" value="0"><span id="tlabel"></span><button id="tclose">✕</button>

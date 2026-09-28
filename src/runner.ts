@@ -13,6 +13,7 @@ export interface AgentConf {
   model?: string; baseUrl?: string; apiKeyEnv?: string; seed?: number;
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
+  at?: [number, number]; // where this body first arrives (its home); default: near the middle
 }
 interface Conf { server: string; joinKey?: string; globalTokens: number; maxConcurrency: number; introFile?: string; agents: AgentConf[] }
 type Call = { verb: string; args: any };
@@ -177,16 +178,18 @@ export function bot(c: AgentConf): Provider {
     const mats: Record<string, number> = {}; for (const m of (carry?.[3] ?? '').matchAll(/(\w+) (\d+)/g)) mats[m[1]] = +m[2];
     const tools = new Set([...(carry?.[3] ?? '').matchAll(/"(\w+)" \(tool\)/g)].map(m => m[1]));
     const vig = +(/Vigor ([\d.]+)/.exec(user)?.[1] ?? 10), here = /Here: ([^\n]*)/.exec(user)?.[1] ?? '';
-    const home = /Spawn is (?:at \(\d+,\d+\), )?(a short walk|some way|far|very far) to the ([\w-]+)/.exec(user);
+    const home = /Home is (?:at \(\d+,\d+\), )?(a short walk|some way|far|very far) to the ([\w-]+)/.exec(user);
     const build = ['stone', 'wood', 'clay', 'sand'].filter(m => mats[m] > 0);
     const r = rnd();
     if (vig < 4 && mats.food) return { calls: [{ verb: 'eat', args: {} }], text: '', tokens: 0 };
-    if (vig < 2.5) return { calls: [{ verb: 'move', args: { to: 'spawn' } }], text: '', tokens: 0 };
+    if (vig < 2.5) return { calls: [{ verb: 'move', args: { to: 'home' } }], text: '', tokens: 0 };
     if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.4) return { calls: [{ verb: 'say', args: { text: pick(['hello!', 'hi there', 'hey']) } }], text: '', tokens: 0 };
     for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return { calls: [{ verb: 'craft', args: { recipe: t } }], text: '', tokens: 0 };
     if (/(stone|wood|clay|sand|fiber|food) [1-9]\d*\/\d/.test(here) && load < cap * 0.8 && r < 0.7) return { calls: [{ verb: 'gather', args: { n: 2 } }], text: '', tokens: 0 };
     const note = /#(\w+) "note from/.exec(carry?.[3] ?? '');
     if (note) return { calls: [{ verb: 'give', args: { to: 'ground', item: note[1] } }], text: '', tokens: 0 };
+    const opposite: Record<string, string> = { n: 's', s: 'n', e: 'w', w: 'e', ne: 'sw', sw: 'ne', nw: 'se', se: 'nw' };
+    if (/^Here: (open water|a river)/m.test(user)) { heading = opposite[heading]; return { calls: [{ verb: 'move', args: { dir: heading, steps: 3 } }], text: '', tokens: 0 }; } // bots don't swim
     let calls: Call[];
     if (build.length && r < 0.12) calls = [{ verb: 'place', args: { material: pick(build), color: color(0.35 + rnd() * 0.3), dir: heading, kind: rnd() < 0.5 ? 'road' : 'wall' } }];
     else if (r < 0.2) calls = [{ verb: 'say', args: { text: pick(lines) } }];
@@ -215,7 +218,7 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
   const log = (s: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${c.name.padEnd(10)} ${s}`);
   const client = new Client(conf.server);
   if (!creds[c.name]) {
-    const r = await fetch(conf.server + '/api/join', { method: 'POST', headers: conf.joinKey ? { 'x-join-key': conf.joinKey } : {}, body: JSON.stringify({ name: c.name, meta: { provider: c.provider, model: c.model ?? null } }) });
+    const r = await fetch(conf.server + '/api/join', { method: 'POST', headers: conf.joinKey ? { 'x-join-key': conf.joinKey } : {}, body: JSON.stringify({ name: c.name, at: c.at, meta: { provider: c.provider, model: c.model ?? null } }) });
     const j: any = await r.json(); if (!j.token) { log(`join failed: ${j.error ?? j.text}`); return; }
     creds[c.name] = j; save('runner-creds.json', creds);
   }

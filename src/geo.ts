@@ -46,34 +46,40 @@ const fbm = (x: number, y: number, scale: number, s: number) =>
 
 export class Geo {
   w: number; h: number; seed: number;
-  biome: Uint8Array; mat: Uint8Array; cap: Uint8Array;
+  biome: Uint8Array; mat: Uint8Array; cap: Uint8Array; elev: Uint8Array;
   constructor(w: number, h: number, seed: number) {
     this.w = w; this.h = h; this.seed = seed;
-    const n = w * h; this.biome = new Uint8Array(n); this.mat = new Uint8Array(n); this.cap = new Uint8Array(n);
-    const cx = w / 2, cy = h / 2, S = seed * 97;
+    const n = w * h; this.biome = new Uint8Array(n); this.mat = new Uint8Array(n); this.cap = new Uint8Array(n); this.elev = new Uint8Array(n);
+    const S = seed * 97;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x;
-      // elevation: noise, falling off toward the edges into sea
-      const ex = Math.min(x, w - 1 - x) / (w * 0.14), ey = Math.min(y, h - 1 - y) / (h * 0.14);
+      // domain warp: bend the coordinates so shapes twist and fray instead of pooling into blobs
+      const wx = x + (fbm(x, y, w * 0.09, S + 1) - 0.5) * w * 0.16, wy = y + (fbm(x, y, w * 0.09, S + 2) - 0.5) * w * 0.16;
+      const ex = Math.min(x, w - 1 - x) / (w * 0.12), ey = Math.min(y, h - 1 - y) / (h * 0.12);
       const edge = Math.min(1, Math.min(ex, ey));
-      let e = (fbm(x, y, w * 0.2, S + 10) - 0.5) * 1.9 + 0.56; e = e * (0.5 + 0.5 * edge) + (edge - 1) * 0.3;
-      let t = (fbm(x, y, w * 0.3, S + 20) - 0.5) * 1.4 + 0.5 + (y / h - 0.5) * 0.5; // south is colder
-      let m = (fbm(x, y, w * 0.22, S + 30) - 0.5) * 1.6 + 0.5;
-      // a mild, temperate heartland around spawn
-      const dc = Math.hypot(x - cx, y - cy) / (w * 0.07);
-      if (dc < 1) { const k = 1 - dc * dc; e = e * (1 - k) + 0.5 * k; t = t * (1 - k) + 0.5 * k; m = m * (1 - k) + 0.45 * k; }
+      // elevation: warped fbm, plus ridged noise (sharp crests) where the land is already high, plus fine grit
+      let e = (fbm(wx, wy, w * 0.2, S + 10) - 0.5) * 1.9 + 0.56;
+      const ridge = 1 - Math.abs(noise(wx, wy, w * 0.07, S + 11) * 2 - 1), ridge2 = 1 - Math.abs(noise(wx, wy, w * 0.025, S + 12) * 2 - 1);
+      e += Math.max(0, e - 0.5) * (ridge ** 3 * 1.1 + ridge2 ** 2 * 0.3) - 0.06;
+      e += (noise(x, y, 3.1, S + 13) - 0.5) * 0.05;
+      e = e * (0.5 + 0.5 * edge) + (edge - 1) * 0.3;
+      let t = (fbm(wx, wy, w * 0.3, S + 20) - 0.5) * 1.4 + 0.5 + (y / h - 0.5) * 0.5 - Math.max(0, e - 0.6) * 0.6; // south and heights are colder
+      let m = (fbm(wx, wy, w * 0.22, S + 30) - 0.5) * 1.6 + 0.5;
+      const fray = (noise(x, y, 5, S + 31) - 0.5) * 0.07; t += fray; m -= fray; // ragged biome borders
+      this.elev[i] = Math.max(0, Math.min(255, Math.round(e * 200)));
+      const dc = 99; // no enforced heartland: operators choose where agents arrive
       let b: Biome;
       if (e < 0.3) b = 'sea';
-      else if (e > 0.8) b = 'peak';
-      else if (e > 0.66) b = 'mountain';
+      else if (e > 0.8 && ridge > 0.62) b = 'peak';
+      else if (e > 0.69) b = 'mountain';
       else if (t < 0.3) b = 'tundra';
       else if (t > 0.66 && m < 0.46) b = 'desert';
       else if (m > 0.62) b = 'marsh';
       else if (m > 0.47) b = 'forest';
       else b = 'meadow';
       // rivers: thin ridges of a separate noise field, only through lowland
-      const r = Math.abs(noise(x, y, w * 0.12, S + 40) - 0.5) + Math.abs(noise(x, y, w * 0.05, S + 41) - 0.5) * 0.25;
-      if (r < 0.026 && e < 0.65 && b !== 'sea' && dc > 0.35) b = 'river';
+      const r = Math.abs(noise(wx, wy, w * 0.12, S + 40) - 0.5) + Math.abs(noise(x, y, w * 0.05, S + 41) - 0.5) * 0.25;
+      if (r < 0.022 && e < 0.66 && b !== 'sea' && dc > 0.35) b = 'river';
       this.biome[i] = BIOMES.indexOf(b);
       // deposits
       const y0 = YIELD[b];
@@ -97,6 +103,18 @@ export class Geo {
   depositAt(x: number, y: number): { m: Material | null; cap: number } {
     if (!this.inside(x, y)) return { m: null, cap: 0 };
     const i = y * this.w + x; return this.mat[i] ? { m: MATERIALS[this.mat[i] - 1], cap: this.cap[i] } : { m: null, cap: 0 };
+  }
+  // A good default arrival point: the meadow or forest tile nearest the middle that is well inland.
+  landing(): [number, number] {
+    const cx = this.w >> 1, cy = this.h >> 1;
+    for (let r = 0; r < this.w; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = cx + dx, y = cy + dy, b = this.biomeAt(x, y); if (b !== 'meadow' && b !== 'forest') continue;
+      let ok = true; // well inland: nothing but land for 8 tiles around
+      for (let j = -8; j <= 8 && ok; j++) for (let i = -8; i <= 8 && ok; i++) { const n = this.biomeAt(x + i, y + j); if (n === 'sea' || n === 'river' || n === 'peak') ok = false; }
+      if (ok) return [x, y];
+    }
+    return [cx, cy];
   }
   // one byte per tile for the viewer: biome in the high nibble, deposit material in the low
   bytes() { const b = new Uint8Array(this.w * this.h); for (let i = 0; i < b.length; i++) b[i] = (this.biome[i] << 4) | this.mat[i]; return b; }

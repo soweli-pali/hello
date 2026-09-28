@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { World } from './world.ts';
 import { initSandbox } from './sandbox.ts';
-import { worldSnapshot, terrainBytes, itemMeta, agentMeta, slimEvent, animalsNow } from './server.ts';
+import { worldSnapshot, terrainBytes, elevBytes, itemMeta, agentMeta, slimEvent, animalsNow } from './server.ts';
 import { RECIPES, rulesText } from './world.ts';
 import { SPECIES } from './fauna.ts';
 
@@ -26,7 +26,7 @@ put('index.html', readFileSync(join(ROOT, 'viewer', 'index.html'), 'utf8').repla
 put('data/world.json', worldSnapshot(w));
 put('data/animals.json', { phase: w.phase(), animals: animalsNow(w) });
 put('data/rules.json', { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES });
-put('data/terrain.json', { w: w.cfg.w, h: w.cfg.h, data: terrainBytes(w) });
+put('data/terrain.json', { w: w.cfg.w, h: w.cfg.h, data: terrainBytes(w), elev: elevBytes(w) });
 const items = [...w.items.values()];
 put('data/items.json', items.map(i => itemMeta(w, i)).reverse());
 for (const it of items) {

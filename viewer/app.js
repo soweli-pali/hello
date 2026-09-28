@@ -23,7 +23,7 @@ const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000 | 0); return s 
 const hueOf = s => { let x = 0; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) | 0; return Math.abs(x) % 360; };
 const STR = { stone: 4, wood: 3, clay: 2, sand: 1, ore: 8, crystal: 3 };
 const MATCOL = { stone: [150, 152, 158], wood: [52, 104, 44], clay: [184, 104, 70], sand: [226, 206, 136], fiber: [168, 196, 104], food: [200, 72, 112], ore: [132, 92, 176], crystal: [120, 236, 244] };
-const BIOCOL = { sea: [20, 44, 70], river: [38, 84, 118], meadow: [66, 92, 54], forest: [34, 64, 40], marsh: [58, 72, 58], desert: [168, 142, 92], tundra: [156, 168, 174], mountain: [98, 92, 86], peak: [204, 212, 220] };
+const BIOCOL = { sea: [18, 42, 68], river: [52, 106, 138], meadow: [78, 104, 60], forest: [36, 68, 42], marsh: [62, 80, 66], desert: [184, 156, 102], tundra: [146, 164, 160], mountain: [112, 104, 96], peak: [226, 232, 238] };
 const BEAST = { deer: '#c89a62', goat: '#eeeae0', wolf: '#565b63' };
 
 // ---------------- state ----------------
@@ -40,7 +40,8 @@ async function boot() {
   for (const [x, y, color, m, s, kind] of snap.blocks) S.blocks.set(`${x},${y}`, { color, m, s, kind });
   for (const [x, y] of snap.piles ?? []) S.piles.add(`${x},${y}`);
   for (const [x, y, n] of snap.tileItems) S.tileItems.set(`${x},${y}`, n);
-  buildTerrain(ter.data); rebuildBlocks();
+  buildTerrain(ter.data, ter.elev); rebuildBlocks(); buildClouds();
+  $('#loading')?.classList.add('gone');
   const saved = JSON.parse(localStorage.getItem('hello.view') || 'null');
   if (saved) Object.assign(view, saved); else fit();
   resize(); stats(); route();
@@ -50,18 +51,68 @@ async function boot() {
   requestAnimationFrame(frame);
 }
 
-function buildTerrain(b64) {
+function buildTerrain(b64, elev64) {
   const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const el = elev64 ? Uint8Array.from(atob(elev64), c => c.charCodeAt(0)) : new Uint8Array(W * H).fill(100);
+  S.bytes = bytes; S.elev = el;
   terrain = document.createElement('canvas'); terrain.width = W; terrain.height = H;
   const tc = terrain.getContext('2d'), img = tc.createImageData(W, H);
+  const isWater = i => { const b = S.biomes[bytes[i] >> 4]; return b === 'sea' || b === 'river'; };
+  const E = (x, y) => el[Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))];
   for (let i = 0; i < W * H; i++) {
     const v = bytes[i], b = S.biomes[v >> 4], m = v & 15, x = i % W, y = i / W | 0;
-    const n = (((x * 73856093) ^ (y * 19349663)) >>> 0) % 7 - 3; // faint texture
-    let c = BIOCOL[b].map(v => v + n * (b === 'sea' ? 0.6 : 1.6));
+    const h = ((x * 73856093) ^ (y * 19349663)) >>> 0, n = h % 7 - 3; // faint texture
+    let c;
+    if (b === 'sea') {
+      // deeper water is darker; the shelf near land is lighter, with a pale lip where it meets the shore
+      const d = Math.max(0, Math.min(1, E(x, y) / 60)), shore = !isWater(i - 1) || !isWater(i + 1) || !isWater(i - W) || !isWater(i + W);
+      c = [14 + 34 * d * d, 32 + 62 * d * d, 56 + 66 * d * d].map(v => v + n * 0.5);
+      if (shore) c = c.map(v => v * 0.6 + 150 * 0.4);
+    } else {
+      c = BIOCOL[b].map(v => v + n * (b === 'peak' ? 0.8 : 1.8));
+      if (b === 'forest' && h % 5 === 0) c = c.map(v => v * 0.72); // canopy
+      if (b === 'desert' && h % 11 === 0) c = c.map(v => v * 1.06);
+      // hillshade, lit from the north-west
+      if (b !== 'river') { const sh = Math.max(0.55, Math.min(1.4, 1 + (E(x - 1, y - 1) - E(x + 1, y + 1)) * (b === 'peak' || b === 'mountain' ? 0.035 : 0.05))); c = c.map(v => v * sh); }
+    }
     if (m) { const mat = S.materials[m - 1], mc = MATCOL[mat], a = mat === 'crystal' || mat === 'ore' ? 0.85 : 0.2; c = c.map((v, k) => v * (1 - a) + mc[k] * a); }
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   tc.putImageData(img, 0, 0);
+}
+// Soft cloud shadows drifting over the land, visible when zoomed out.
+let clouds;
+function buildClouds() {
+  const N = 128, c = document.createElement('canvas'); c.width = c.height = N;
+  const g = c.getContext('2d'), img = g.createImageData(N, N);
+  const hs = (x, y, s) => { let v = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1442695041)) | 0; v = Math.imul(v ^ (v >>> 13), 1274126177); return ((v ^ (v >>> 16)) >>> 0) / 4294967296; };
+  const vn = (x, y, sc, s) => { const gx = x / sc, gy = y / sc, x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy), P = N / sc;
+    const q = (a, b) => hs(((a % P) + P) % P, ((b % P) + P) % P, s); const A = q(x0, y0), B = q(x0 + 1, y0), C = q(x0, y0 + 1), D = q(x0 + 1, y0 + 1); return A + (B - A) * sx + (C - A) * sy + (A - B - C + D) * sx * sy; };
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const v = vn(x, y, 32, 1) * 0.6 + vn(x, y, 16, 2) * 0.3 + vn(x, y, 8, 3) * 0.1, a = Math.max(0, v - 0.55) / 0.45;
+    img.data.set([10, 16, 24, Math.round(a * a * 120)], (y * N + x) * 4);
+  }
+  g.putImageData(img, 0, 0); clouds = c;
+}
+function drawClouds(ox, oy, z) {
+  if (!clouds || z > 10) return;
+  const fade = z < 5 ? 1 : (10 - z) / 5, scale = 7 * z, span = 128 * scale, t = Date.now() / 1000;
+  const offx = ((t * 0.35 * z) % span + span) % span, offy = ((t * 0.12 * z) % span + span) % span;
+  cx.save(); cx.globalAlpha = fade; cx.imageSmoothingEnabled = true;
+  cx.beginPath(); cx.rect(ox, oy, W * z, H * z); cx.clip();
+  for (let yy = oy - span + offy; yy < innerHeight; yy += span) for (let xx = ox - span + offx; xx < innerWidth; xx += span) if (xx + span > 0 && yy + span > 0) cx.drawImage(clouds, xx, yy, span, span);
+  cx.restore(); cx.imageSmoothingEnabled = false;
+}
+function drawMinimap() {
+  const mm = $('#minimap'); if (!mm) return;
+  const show = view.z >= 5 && terrain; mm.hidden = !show; document.body.classList.toggle('mm', !!show); if (!show) return;
+  const d = devicePixelRatio || 1, size = mm.clientWidth; if (mm.width !== size * d) { mm.width = mm.height = size * d; }
+  const g = mm.getContext('2d'), k = mm.width / Math.max(W, H);
+  g.imageSmoothingEnabled = true; g.drawImage(terrain, 0, 0, W * k, H * k); g.drawImage(blockLayer, 0, 0, W * k, H * k);
+  g.fillStyle = '#f4efe2';
+  for (const a of S.agents.values()) if (a.state !== 'left' && a.state !== 'dead') g.fillRect(a.x * k - d, a.y * k - d, 2 * d, 2 * d);
+  const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(innerWidth, innerHeight);
+  g.strokeStyle = '#f0c46a'; g.lineWidth = 1.5 * d; g.strokeRect(x0 * k, y0 * k, (x1 - x0) * k, (y1 - y0) * k);
 }
 function rebuildBlocks(blocks = S.blocks) {
   blockLayer = document.createElement('canvas'); blockLayer.width = W; blockLayer.height = H;
@@ -93,7 +144,9 @@ function frame() {
     if (Math.abs(ex) + Math.abs(ey) > 0.01) { an.dx += ex * 0.05; an.dy += ey * 0.05; dirty = true; } else { an.dx = an.x; an.dy = an.y; }
   }
   if (S.speech.length && S.speech[0].until < Date.now()) { S.speech = S.speech.filter(s => s.until > Date.now()); dirty = true; }
-  if (dirty) { draw(); dirty = false; }
+  const now = performance.now();
+  if (view.z <= 10 && now - (frame.last ?? 0) > 80) { dirty = true; } // clouds drift
+  if (dirty) { frame.last = now; draw(); drawMinimap(); dirty = false; }
   requestAnimationFrame(frame);
 }
 function draw() {
@@ -130,7 +183,7 @@ function draw() {
     const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
     const [sx, sy] = toScreen(x + 0.3, y + 0.62); cx.fillStyle = '#b08a5a'; cx.beginPath(); cx.arc(sx, sy, z * 0.13, 0, 7); cx.arc(sx + z * 0.22, sy + z * 0.05, z * 0.1, 0, 7); cx.fill();
   }
-  if (z >= 1.5) { // the safe ground around spawn
+  if (z >= 1.5 && S.cfg.safeRadius > 0) { // safe ground, if this world has any
     const r = S.cfg.safeRadius, [sx, sy] = toScreen(S.spawn[0] - r, S.spawn[1] - r);
     cx.setLineDash([4, 4]); cx.strokeStyle = '#f0c46a55'; cx.lineWidth = 1; cx.strokeRect(sx, sy, (2 * r + 1) * z, (2 * r + 1) * z); cx.setLineDash([]);
   }
@@ -142,11 +195,25 @@ function draw() {
     else { cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); }
     if (z >= 14) { cx.fillStyle = '#0b0e0c'; cx.font = `600 ${Math.round(z * 0.3)}px sans-serif`; cx.textAlign = 'center'; cx.fillText(an.sp[0], sx, sy + z * 0.1); }
   }
+  drawClouds(ox, oy, z);
   const dark = darkness();
-  if (dark > 0) { cx.fillStyle = `rgba(8, 12, 32, ${dark})`; cx.fillRect(0, 0, innerWidth, innerHeight); }
+  if (dark > 0) {
+    cx.fillStyle = `rgba(8, 12, 32, ${dark})`; cx.fillRect(0, 0, innerWidth, innerHeight);
+    // bodies carry a little warmth into the dark
+    cx.globalCompositeOperation = 'lighter';
+    for (const a of S.agents.values()) {
+      if (a.state === 'left' || a.state === 'dead') continue;
+      const [sx, sy] = toScreen(a.dx + 0.5, a.dy + 0.5), r = Math.max(10, z * 2.2), gl = cx.createRadialGradient(sx, sy, 0, sx, sy, r);
+      gl.addColorStop(0, `rgba(255, 196, 120, ${0.35 * dark})`); gl.addColorStop(1, 'rgba(255, 196, 120, 0)');
+      cx.fillStyle = gl; cx.fillRect(sx - r, sy - r, 2 * r, 2 * r);
+    }
+    cx.globalCompositeOperation = 'source-over';
+  }
+  if (S.hover && z >= 6 && matchMedia('(hover: hover)').matches) { const [sx, sy] = toScreen(S.hover.x, S.hover.y); cx.strokeStyle = '#ffffff55'; cx.lineWidth = 1; cx.strokeRect(sx + 0.5, sy + 0.5, z - 1, z - 1); }
   if (S.sel) { const [sx, sy] = toScreen(S.sel.x, S.sel.y); cx.strokeStyle = '#f0c46a'; cx.lineWidth = 2; cx.strokeRect(sx - 1, sy - 1, Math.max(z, 4) + 2, Math.max(z, 4) + 2); }
   // agents
   cx.textAlign = 'center'; cx.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
+  const labels = [];
   for (const a of S.agents.values()) {
     if (a.state === 'left') continue;
     const [sx, sy] = toScreen(a.dx + 0.5, a.dy + 0.5), r = Math.max(3, z * 0.36);
@@ -154,7 +221,13 @@ function draw() {
     cx.globalAlpha = a.state === 'resting' ? 0.5 : 1;
     cx.fillStyle = `hsl(${hueOf(a.name)} 75% 62%)`; cx.strokeStyle = '#0b0e0c'; cx.lineWidth = 2;
     cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); cx.stroke();
-    if (z >= 7) { cx.fillStyle = '#e6ebe4'; cx.fillText(a.name + (a.state === 'resting' ? ' z' : ''), sx, sy - r - 5); }
+    if (z >= 7) { // skip a name that would sit on top of one already drawn
+      const ly = sy - r - 5, w2 = cx.measureText(a.name).width / 2 + 3;
+      if (!labels.some(l => Math.abs(l[0] - sx) < l[2] + w2 && Math.abs(l[1] - ly) < 13)) {
+        labels.push([sx, ly, w2]); cx.lineWidth = 3; cx.strokeStyle = '#0b0e0caa'; cx.strokeText(a.name, sx, ly);
+        cx.fillStyle = '#eef1ea'; cx.fillText(a.name + (a.state === 'resting' ? ' z' : ''), sx, ly);
+      }
+    }
     cx.globalAlpha = 1;
   }
   // speech bubbles
@@ -201,6 +274,21 @@ const endPtr = e => {
   if (!ptrs.size && moved < 8 && e.type === 'pointerup') { const [x, y] = toWorld(e.clientX, e.clientY).map(Math.floor); if (x >= 0 && y >= 0 && x < W && y < H) location.hash = `tile/${x}/${y}`; }
   startGesture(); saveView();
 };
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'mouse' || ptrs.size) return;
+  const [x, y] = toWorld(e.clientX, e.clientY).map(Math.floor);
+  if (!S.hover || S.hover.x !== x || S.hover.y !== y) {
+    S.hover = { x, y }; dirty = true;
+    const tip = $('#tip'); if (!tip || !S.bytes || x < 0 || y < 0 || x >= W || y >= H) return;
+    const v = S.bytes[y * W + x], m = v & 15;
+    tip.textContent = `${S.biomes[v >> 4]}${m ? ' · ' + S.materials[m - 1] : ''} · ${x}, ${y}`;
+  }
+});
+cv.addEventListener('pointerleave', () => { S.hover = null; dirty = true; const tip = $('#tip'); if (tip) tip.textContent = ''; });
+$('#minimap')?.addEventListener('click', e => {
+  const r = e.currentTarget.getBoundingClientRect(), k = r.width / Math.max(W, H);
+  view.x = (e.clientX - r.left) / k; view.y = (e.clientY - r.top) / k; dirty = true; saveView();
+});
 cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', endPtr);
 function startGesture() {
   const pts = [...ptrs.values()];

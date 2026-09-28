@@ -36,7 +36,7 @@ export interface Config {
   vigorMax: number; vigorSec: number; // vigor regenerates 1 per vigorSec
   carry: number;                      // material units a bare body can carry
   respawnSec: number; permadeath: boolean;
-  safeRadius: number;                 // nobody can be harmed this close to spawn
+  safeRadius: number;                 // nobody can be harmed this close to the default landing point (0 = nowhere is safe)
   harm: boolean;                      // whether agents can strike each other at all
   dayMin: number;                     // real minutes per day/night cycle
   animalRespawnMin: number;
@@ -44,7 +44,7 @@ export interface Config {
 }
 export const DEFAULTS: Config = {
   w: 512, h: 512, seed: 7, apMax: 20, apSec: 2, regenSec: 300, see: 6, hear: 10, reach: 2,
-  vigorMax: 10, vigorSec: 90, carry: 40, respawnSec: 300, permadeath: false, safeRadius: 5, harm: true,
+  vigorMax: 10, vigorSec: 90, carry: 40, respawnSec: 300, permadeath: false, safeRadius: 0, harm: true,
   dayMin: 48, animalRespawnMin: 20, ruins: 7,
 };
 
@@ -53,7 +53,7 @@ export interface Agent {
   id: string; name: string; x: number; y: number;
   ap: number; apT: number; vig: number; vigT: number; mats: Record<string, number>;
   notebook: string; blocked: Set<string>; state: 'active' | 'resting' | 'left' | 'dead';
-  deadUntil: number; lastBite: number; deaths: number;
+  deadUntil: number; lastBite: number; deaths: number; home: [number, number];
   joined: number; lastSeen: number; meta: Record<string, unknown>;
   hearCursor: number; // in-memory only: last event seq this agent has been shown
 }
@@ -144,7 +144,7 @@ export class World {
     switch (e.type) {
       case 'join': {
         const a: Agent = { id: e.a!, name: e.name, x: e.x, y: e.y, ap: this.cfg.apMax, apT: e.t, vig: this.cfg.vigorMax, vigT: e.t, mats: {},
-          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
+          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
         this.agents.set(a.id, a); this.byName.set(a.name.toLowerCase(), a.id); break;
       }
       case 'move': ag!.x = e.x; ag!.y = e.y; break;
@@ -293,8 +293,10 @@ export class World {
     return this.agents.get(s) ?? this.agents.get(this.byName.get(s) ?? '');
   }
   dist(ax: number, ay: number, bx: number, by: number) { return Math.max(Math.abs(ax - bx), Math.abs(ay - by)); }
-  spawn(): [number, number] { return [Math.floor(this.cfg.w / 2), Math.floor(this.cfg.h / 2)]; }
-  safe(x: number, y: number) { const [sx, sy] = this.spawn(); return this.dist(x, y, sx, sy) <= this.cfg.safeRadius; }
+  // The default landing point, for agents joined without a chosen place.
+  private landingCache: [number, number] | null = null;
+  spawn(): [number, number] { return this.landingCache ??= this.geo.landing(); }
+  safe(x: number, y: number) { if (this.cfg.safeRadius <= 0) return false; const [sx, sy] = this.spawn(); return this.dist(x, y, sx, sy) <= this.cfg.safeRadius; }
   phase(t = this.now()) { return (t / (this.cfg.dayMin * 60_000) + 0.3) % 1; }
   night(t = this.now()) { return this.phase(t) >= 0.75; }
   timeWords(t = this.now()) { const p = this.phase(t); return p < 0.25 ? 'morning' : p < 0.5 ? 'midday' : p < 0.75 ? 'evening' : 'night'; }
@@ -315,15 +317,23 @@ export class World {
   }
 
   // ---------- identity ----------
-  join(name: string, meta: Record<string, unknown> = {}): { id: string; token: string } {
+  // at: where the operator places this body (its home). Without it, near the default landing point.
+  join(name: string, meta: Record<string, unknown> = {}, at?: [number, number]): { id: string; token: string } {
     name = String(name ?? '').trim().slice(0, 32);
     if (!/^[\p{L}\p{N}_\- .]{1,32}$/u.test(name) || /^(world|ground|user|spawn)$/i.test(name)) throw new Error('name: 1-32 letters, digits, space, _ - .');
     if (this.byName.has(name.toLowerCase())) throw new Error('name taken');
     const id = 'a' + (this.seq + 1);
-    const e = this.emit('join', id, { name, ...this.spawnSpot(), meta });
+    if (at && !(this.geo.inside(at[0], at[1]))) throw new Error('that place is outside the world');
+    const e = this.emit('join', id, { name, ...(at ? { x: Math.trunc(at[0]), y: Math.trunc(at[1]) } : this.spawnSpot()), meta });
     return { id: e.a!, token: this.issueToken(e.a!) };
   }
-  spawnSpot() { const [sx, sy] = this.spawn(); return { x: sx + Math.floor(Math.random() * 7) - 3, y: sy + Math.floor(Math.random() * 7) - 3 }; }
+  spawnSpot(): { x: number; y: number } { const [sx, sy] = this.spawn(); return { x: sx + Math.floor(Math.random() * 5) - 2, y: sy + Math.floor(Math.random() * 5) - 2 }; }
+  // Near an agent's home, on a tile that isn't water if one is close.
+  homeSpot(a: Agent): { x: number; y: number } {
+    const [hx, hy] = a.home;
+    for (let i = 0; i < 12; i++) { const x = hx + Math.floor(Math.random() * 3) - 1, y = hy + Math.floor(Math.random() * 3) - 1, b = this.geo.biomeAt(x, y); if (b !== 'sea' && b !== 'river') return { x, y }; }
+    return { x: hx, y: hy };
+  }
   issueToken(agent: string) {
     const token = randomBytes(24).toString('base64url');
     this.db.prepare('INSERT INTO tokens VALUES (?,?)').run(sha(token), agent);
@@ -340,7 +350,7 @@ export class World {
     if (!f) return { ok: false, text: `Unknown verb "${verb}". Verbs: ${Object.keys(VERBS).join(', ')}.` };
     try {
       const ghostly = ['look', 'note', 'rest', 'inspect'].includes(verb); // what the dead can still do
-      if (a.state === 'dead' && this.now() >= a.deadUntil) this.emit('wake', a.id, this.spawnSpot());
+      if (a.state === 'dead' && this.now() >= a.deadUntil) this.emit('wake', a.id, this.homeSpot(a));
       if (a.state === 'dead') return ghostly ? f.run(this, a, args ?? {}) : { ok: false, text: deadText(this, a) };
       const pre = this.dangers(a);
       if ((a.state as string) === 'dead') return { ok: false, text: pre };
@@ -454,12 +464,12 @@ export const VERBS: Record<string, Verb> = {
     run: (w, a, x) => ({ ok: true, text: observe(w, a, detailOf(x.detail)) }),
   },
   move: {
-    help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear. {to:"spawn"} always works and is free, but you arrive with nothing: all you carry is left where you stood.',
-    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', to: '"spawn"', force: 'true to keep walking even if a step would kill you' },
+    help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear. {to:"home"} always works and is free, but you arrive with nothing: all you carry is left where you stood.',
+    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', to: '"home" (where you first arrived)', force: 'true to keep walking even if a step would kill you' },
     run: (w, a, x) => {
       if (x.to === 'spawn' || x.to === 'home') {
-        const s = w.spawnSpot(); w.emit('home', a.id, { from: [a.x, a.y], ...s });
-        return { ok: true, text: `You are back at spawn, empty-handed. What you carried lies where you were.` };
+        const s = w.homeSpot(a); w.emit('home', a.id, { from: [a.x, a.y], ...s });
+        return { ok: true, text: `You are back home, empty-handed. What you carried lies where you were.` };
       }
       let dest: [number, number] | null = null, dx = 0, dy = 0, steps = 10;
       if (x.dir) { const d = DIRS[String(x.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); [dx, dy] = d; steps = Math.max(1, Math.min(10, Math.trunc(x.steps ?? 1))); }
@@ -469,7 +479,7 @@ export const VERBS: Record<string, Verb> = {
         if (!p || w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error(`You can't see "${x.toward}" from here.`);
         dest = [p[0], p[1]];
       } else if (x.x !== undefined && x.y !== undefined) dest = w.target(a, x);
-      else throw new Error('move needs dir (+steps), toward, or to:"spawn"');
+      else throw new Error('move needs dir (+steps), toward, or to:"home"');
       let cx = a.x, cy = a.y, cost = 0, dv = 0; const notes: string[] = []; let why = '';
       const vig0 = w.vigOf(a);
       for (let i = 0; i < steps; i++) {
@@ -709,11 +719,11 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   strike: {
-    help: 'Hit an adjacent agent or animal: 1 damage (3 with a spear). Killing an animal yields food and fiber. Nobody can be harmed near spawn. 3 AP.',
+    help: 'Hit an adjacent agent or animal: 1 damage (3 with a spear). Killing an animal yields food and fiber. 3 AP.',
     args: { agent: 'agent name', animal: 'animal id' },
     run: (w, a, x) => {
       const dmg = w.has(a, 'spear') ? 3 : 1;
-      if (w.safe(a.x, a.y)) throw new Error('Nobody can be harmed this close to spawn.');
+      if (w.safe(a.x, a.y)) throw new Error('Nobody can be harmed on this safe ground.');
       if (x.animal) {
         const an = w.fauna.byId.get(String(x.animal)); if (!an || !w.fauna.alive(an, w.now())) throw new Error('No such animal here.');
         const p = w.animalPos(an); w.near(a, p[0], p[1], 1);
@@ -734,7 +744,7 @@ export const VERBS: Record<string, Verb> = {
       if (!w.cfg.harm) throw new Error('In this world, agents cannot harm each other.');
       const b = w.find(x.agent); if (!b || b.id === a.id || b.state === 'dead' || b.state === 'left') throw new Error('No such agent here.');
       w.near(a, b.x, b.y, 1);
-      if (w.safe(b.x, b.y)) throw new Error('Nobody can be harmed this close to spawn.');
+      if (w.safe(b.x, b.y)) throw new Error('Nobody can be harmed on this safe ground.');
       w.need(a, 3);
       w.emit('strike', a.id, { target: b.id, dmg, x: b.x, y: b.y, cost: 3 });
       if (w.vigOf(b) <= 0) { w.kill(b, `struck down by ${a.name}`); return { ok: true, text: `You struck ${b.name}. They fall and die, dropping everything they carried.` }; }
@@ -773,13 +783,13 @@ export const VERBS: Record<string, Verb> = {
 // The world's physics, in words, for whoever drives an agent. Generated from config so it is always true.
 export function rulesText(cfg: Config) {
   return [
-    `- The land is ${cfg.w}x${cfg.h} tiles: a temperate heartland around spawn, and far beyond it forests, marshes, deserts, tundra, mountains, rivers and sea. Travel is slow and some places are dangerous.`,
+    `- The land is ${cfg.w}x${cfg.h} tiles of forests, meadows, marshes, deserts, tundra, mountain ranges, rivers and sea. Travel is slow and some places are dangerous.`,
     `- Actions cost action points (max ${cfg.apMax}, +1 every ${cfg.apSec}s). Thinking, looking and writing notes are free.`,
     `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Deserts drain it without a waterskin, cold without a cloak, water without a boat; wolves bite at night${cfg.harm ? '; other agents can strike you' : ''}.`,
     cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
-      : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at spawn with nothing, remembering what you remember.`,
-    `- Within ${cfg.safeRadius} tiles of spawn nobody can be harmed.`,
-    `- move {"to":"spawn"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
+      : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at your home (where you first arrived) with nothing, remembering what you remember.`,
+    ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
+    `- move {"to":"home"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
     `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
     `- Days and nights pass (${cfg.dayMin} real minutes per cycle). At night you see less.`,
   ].join('\n');
@@ -812,7 +822,7 @@ const fmtMats = (m: Record<string, number>) => Object.entries(m).filter(([, n]) 
 const fmtItems = (its: Item[]) => its.map(i => `#${i.id} "${i.title}" (${i.kind})`).join(', ');
 function deadText(w: World, a: Agent) {
   return a.deadUntil === Infinity ? 'You are dead. In this world death is permanent; you can still write in your notebook, or leave.'
-    : `You are dead. You will wake at spawn in about ${Math.max(1, Math.ceil((a.deadUntil - w.now()) / 1000))}s.`;
+    : `You are dead. You will wake at home in about ${Math.max(1, Math.ceil((a.deadUntil - w.now()) / 1000))}s.`;
 }
 
 function describeTile(w: World, a: Agent, x: number, y: number) {
@@ -834,7 +844,7 @@ export function observe(w: World, a: Agent, detail = 1): string {
   const pets = w.tamed(a);
   out.push(`Carrying (${w.load(a)}/${w.capacity(a)}): ${fmtMats(a.mats) || 'no materials'}${carried.length ? '; ' + fmtItems(carried) : ''}${pets.length ? `; followed by ${pets.map(p => `${p.sp} ${p.id}`).join(', ')}` : ''}.`);
   out.push(`Here: ${describeTile(w, a, a.x, a.y)}`);
-  const [sx, sy] = w.spawn(); out.push(`Spawn is ${compass ? `at (${sx},${sy}), ` : ''}${roughly(a, sx, sy)}.`);
+  const [sx, sy] = a.home; out.push(`Home is ${compass ? `at (${sx},${sy}), ` : ''}${roughly(a, sx, sy)}.`);
   const others = [...w.agents.values()].filter(o => o.id !== a.id && o.state !== 'left' && o.state !== 'dead' && w.dist(a.x, a.y, o.x, o.y) <= r);
   if (others.length) out.push(`Agents in sight: ${others.map(o => `${o.name} ${rel(a, o.x, o.y)}${o.state === 'resting' ? ' (resting)' : ''}${a.blocked.has(o.id) ? ' (blocked)' : ''}`).join('; ')}.`);
   const beasts = w.animalsNear(a.x, a.y, r, t).filter(({ an }) => an.tamedBy !== a.id);

@@ -46,6 +46,7 @@ export function worldSnapshot(w: World) {
   };
 }
 export function terrainBytes(w: World) { return Buffer.from(w.geo.bytes()).toString('base64'); }
+export function elevBytes(w: World) { return Buffer.from(w.geo.elev).toString('base64'); }
 export function animalsNow(w: World) {
   const t = w.now();
   return w.fauna.list.filter(an => w.fauna.alive(an, t)).map(an => { const [x, y] = w.animalPos(an, t); return { id: an.id, sp: an.sp, x, y, tamedBy: an.tamedBy }; });
@@ -64,7 +65,7 @@ async function readBody(req: IncomingMessage): Promise<any> {
 export function startServer(w: World, port: number, host: string) {
   const clients = new Set<ServerResponse>();
   w.listeners.add(e => { const line = `data: ${JSON.stringify(slimEvent(e))}\n\n`; for (const c of clients) c.write(line); });
-  let terrainCache = '';
+  let terrainCache = '', elevCache = '';
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x'); const p = url.pathname;
@@ -74,7 +75,7 @@ export function startServer(w: World, port: number, host: string) {
         const key = process.env.JOIN_KEY;
         if (key && req.headers['x-join-key'] !== key) return send(res, 403, { error: 'join key required' });
         const b = await readBody(req);
-        return send(res, 200, w.join(b.name, b.meta ?? {}));
+        return send(res, 200, w.join(b.name, b.meta ?? {}, Array.isArray(b.at) ? [Number(b.at[0]), Number(b.at[1])] : undefined));
       }
       if (p === '/api/act' && req.method === 'POST') {
         const a = w.auth(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
@@ -89,7 +90,7 @@ export function startServer(w: World, port: number, host: string) {
       if (p === '/api/world') return send(res, 200, worldSnapshot(w));
       if (p === '/api/animals') return send(res, 200, { phase: w.phase(), animals: animalsNow(w) });
       if (p === '/api/rules') return send(res, 200, { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES });
-      if (p === '/api/terrain') return send(res, 200, { w: w.cfg.w, h: w.cfg.h, data: terrainCache ||= terrainBytes(w) });
+      if (p === '/api/terrain') return send(res, 200, { w: w.cfg.w, h: w.cfg.h, data: terrainCache ||= terrainBytes(w), elev: elevCache ||= elevBytes(w) });
       if (p === '/api/tile') {
         const x = Number(url.searchParams.get('x')), y = Number(url.searchParams.get('y'));
         const k = `${x},${y}`;
