@@ -3,7 +3,10 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const STATIC = !!window.HELLO_STATIC; // set by the static export
-const api = p => fetch(STATIC ? staticPath(p) : p).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+// A single-file snapshot carries its data inline (window.HELLO_DATA: path -> text); otherwise static files, or the live API.
+const EMBED = window.HELLO_DATA;
+const api = p => EMBED ? (EMBED[staticPath(p)] != null ? Promise.resolve(JSON.parse(EMBED[staticPath(p)])) : Promise.reject(new Error('not in this snapshot')))
+  : fetch(STATIC ? staticPath(p) : p).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
 function staticPath(p) {
   const u = new URL(p, location.href), q = u.searchParams;
   if (u.pathname === '/api/tile') return `data/tile/${q.get('x')}_${q.get('y')}.json`;
@@ -11,7 +14,11 @@ function staticPath(p) {
   if (u.pathname === '/api/items') return 'data/items.json';
   return 'data' + u.pathname.replace(/^\/api/, '') + '.json';
 }
-const raw = (id, kind) => STATIC ? `data/raw/${id}.${{ svg: 'svg', html: 'html' }[kind] ?? 'txt'}` : `/api/item/${id}/raw`;
+const raw = (id, kind) => {
+  const path = `data/raw/${id}.${{ svg: 'svg', html: 'html' }[kind] ?? 'txt'}`;
+  if (EMBED) return `data:${{ svg: 'image/svg+xml', html: 'text/html' }[kind] ?? 'text/plain'};charset=utf-8,` + encodeURIComponent(EMBED[path] ?? '');
+  return STATIC ? path : `/api/item/${id}/raw`;
+};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);

@@ -58,4 +58,18 @@ for (const k of artifact ? [...w.agents.values()].map(a => `${a.x},${a.y}`) : ti
     items: w.itemsAt({ t: [x, y] }).map(i => itemMeta(w, i)), agents: [...w.agents.values()].filter(a => w.dist(a.x, a.y, x, y) <= 1 && a.state !== 'left').map(a => agentMeta(w, a)),
     speech: evs.filter(e => e.type === 'say' && w.dist(e.x, e.y, x, y) <= w.cfg.hear).slice(-30).map(e => ({ t: e.t, who: w.agents.get(e.a!)?.name, text: e.text })) });
 }
+// --single: one self-contained page (code, styles and data inlined), for viewers that can't fetch side files
+if (args.includes('--single')) {
+  const { readdirSync, statSync } = await import('node:fs');
+  const data: Record<string, string> = {};
+  const walk = (d: string) => { for (const f of readdirSync(join(out, d))) { const p = d ? `${d}/${f}` : f; statSync(join(out, p)).isDirectory() ? walk(p) : p.startsWith('data/') && (data[p] = readFileSync(join(out, p), 'utf8')); } };
+  walk('');
+  const inline = (f: string) => readFileSync(join(out, f), 'utf8').replace(/<\/script/gi, '<\\/script');
+  const one = page
+    .replace('<link rel="stylesheet" href="style.css">', `<style>${readFileSync(join(out, 'style.css'), 'utf8')}</style>`)
+    .replace('<script src="static.js"></script>', `<script>window.HELLO_STATIC = true; window.HELLO_DATA = ${JSON.stringify(data).replace(/<\//g, '<\\/')};</script>`)
+    .replace('<script src="tiles.js"></script>', `<script>${inline('tiles.js')}</script>`)
+    .replace('<script src="app.js"></script>', `<script>${inline('app.js')}</script>`);
+  writeFileSync(join(out, 'single.html'), one);
+}
 console.log(`exported ${items.length} items, ${w.agents.size} agents, ${tiles.size} tiles, ${evs.length} events to ${out}${withNotes ? ' (with notebooks)' : ''}`);
