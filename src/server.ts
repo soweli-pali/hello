@@ -41,7 +41,8 @@ export function worldSnapshot(w: World) {
   return {
     cfg: w.cfg, seq: w.seq, now: w.now(), materials: MATERIALS,
     agents: [...w.agents.values()].map(a => agentMeta(w, a)),
-    blocks: [...w.blocks].map(([k, b]) => { const [x, y] = k.split(',').map(Number); return [x, y, b.color, b.m, b.s, b.kind]; }),
+    blocks: [...w.blocks].map(([k, b]) => { const [x, y] = k.split(',').map(Number); return [x, y, b.color, b.m, b.s, b.kind, b.t]; }),
+    roofs: [...w.roofs].map(([k, b]) => { const [x, y] = k.split(',').map(Number); return [x, y, b.color, b.m]; }),
     tileItems, piles: [...w.ground].filter(([, g]) => Object.values(g).some(n => n > 0)).map(([k]) => k.split(',').map(Number)),
     phase: w.phase(), biomes: BIOMES, spawn: w.spawn(), safeRadius: w.cfg.safeRadius,
   };
@@ -101,6 +102,7 @@ export function startServer(w: World, port: number, host: string) {
         return send(res, 200, {
           x, y, biome: w.geo.biomeAt(x, y), safe: w.safe(x, y), ground: w.ground.get(k) ?? {}, deposit: w.depositAt(x, y), block: w.blocks.get(k) ? { ...w.blocks.get(k), byName: w.blocks.get(k)!.by === 'world' ? 'the world' : w.agents.get(w.blocks.get(k)!.by)?.name } : null,
           animals: animalsNow(w).filter(an => w.dist(an.x, an.y, x, y) <= 2),
+          roof: w.roofs.get(k) ?? null, sheltered: w.sheltered(x, y), fireLit: w.fireLit(w.blocks.get(k)),
           items: w.itemsAt({ t: [x, y] }).map(i => itemMeta(w, i)),
           agents: [...w.agents.values()].filter(a => w.dist(a.x, a.y, x, y) <= 1 && a.state !== 'left').map(a => agentMeta(w, a)),
           speech,

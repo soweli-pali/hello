@@ -31,14 +31,16 @@ let SKEW = 0; const worldNow = () => Date.now() + SKEW;
 const ago = t => { const s = Math.max(0, (worldNow() - t) / 1000 | 0); return s < 60 ? `${s}s` : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d`; };
 const hueOf = s => { let x = 0; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) | 0; return Math.abs(x) % 360; };
 const STR = new Proxy({}, { get: () => 1 }); // strength is only cosmetic client-side
-const FLOORS = new Set(['cobble', 'floor', 'tile', 'cloth', 'garden', 'mosaic']);
+const FLOORS = new Set(['cobble', 'floor', 'tile', 'cloth', 'garden', 'mosaic', 'fire']);
 const kindOf = e => e.kind ?? (FLOORS.has(e.m) ? 'road' : 'wall');
+const FIRE_MS = 4 * 3600_000, fireLit = b => b.m === 'fire' && worldNow() - (b.t ?? 0) < FIRE_MS;
+const layerOf = kind => kind === 'roof' ? S.roofs : S.blocks;
 const MATCOL = { stone: [150, 152, 158], wood: [52, 104, 44], clay: [184, 104, 70], sand: [226, 206, 136], fiber: [168, 196, 104], food: [200, 72, 112], ore: [132, 92, 176], crystal: [120, 236, 244], marble: [238, 235, 228], ochre: [181, 83, 47], indigo: [47, 64, 140], shell: [242, 222, 214], amber: [234, 165, 60] };
 const BIOCOL = { sea: [18, 42, 68], river: [52, 106, 138], meadow: [78, 104, 60], forest: [36, 68, 42], marsh: [62, 80, 66], desert: [184, 156, 102], tundra: [146, 164, 160], mountain: [112, 104, 96], peak: [226, 232, 238], beach: [214, 198, 152] };
 const BEAST = { deer: '#c89a62', goat: '#eeeae0', wolf: '#565b63' };
 
 // ---------------- state ----------------
-const S = { cfg: null, agents: new Map(), blocks: new Map(), tileItems: new Map(), piles: new Set(), animals: new Map(), materials: [], biomes: [], spawn: [0, 0], seq: 0, speech: [], sel: null, time: null };
+const S = { cfg: null, agents: new Map(), blocks: new Map(), roofs: new Map(), tileItems: new Map(), piles: new Set(), animals: new Map(), materials: [], biomes: [], spawn: [0, 0], seq: 0, speech: [], sel: null, time: null };
 const cv = $('#map'), cx = cv.getContext('2d');
 let terrain, blockLayer, W = 256, H = 256;
 const view = { x: 128, y: 128, z: 4 }; // z = pixels per tile
@@ -49,7 +51,8 @@ async function boot() {
   if (STATIC && snap.now) SKEW = snap.now - Date.now();
   S.cfg = snap.cfg; W = snap.cfg.w; H = snap.cfg.h; S.materials = snap.materials; S.biomes = snap.biomes; S.spawn = snap.spawn; S.seq = snap.seq;
   for (const a of snap.agents) S.agents.set(a.id, { ...a, dx: a.x, dy: a.y });
-  for (const [x, y, color, m, s, kind] of snap.blocks) S.blocks.set(`${x},${y}`, { color, m, s, kind });
+  for (const [x, y, color, m, s, kind, t] of snap.blocks) S.blocks.set(`${x},${y}`, { color, m, s, kind, t });
+  for (const [x, y, color, m] of snap.roofs ?? []) S.roofs.set(`${x},${y}`, { color, m, s: 1, kind: 'roof' });
   for (const [x, y] of snap.piles ?? []) S.piles.add(`${x},${y}`);
   for (const [x, y, n] of snap.tileItems) S.tileItems.set(`${x},${y}`, n);
   buildTerrain(ter.data, ter.elev); rebuildBlocks(); buildClouds();
@@ -127,14 +130,14 @@ function drawMinimap() {
   const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(innerWidth, innerHeight);
   g.strokeStyle = '#f0c46a'; g.lineWidth = 1.5 * d; g.strokeRect(x0 * k, y0 * k, (x1 - x0) * k, (y1 - y0) * k);
 }
-function rebuildBlocks(blocks = S.blocks) {
+function rebuildBlocks(blocks = S.blocks, roofs = S.roofs) {
   blockLayer = document.createElement('canvas'); blockLayer.width = W; blockLayer.height = H;
   const bc = blockLayer.getContext('2d');
-  for (const [k, b] of blocks) { const [x, y] = k.split(',').map(Number); bc.fillStyle = b.color; bc.fillRect(x, y, 1, 1); }
+  for (const L of [blocks, roofs]) for (const [k, b] of L) { const [x, y] = k.split(',').map(Number); bc.fillStyle = b.color; bc.fillRect(x, y, 1, 1); }
   dirty = true;
 }
 function paintBlock(x, y) {
-  const bc = blockLayer.getContext('2d'), b = S.blocks.get(`${x},${y}`);
+  const k = `${x},${y}`, bc = blockLayer.getContext('2d'), b = S.roofs.get(k) ?? S.blocks.get(k);
   bc.clearRect(x, y, 1, 1); if (b) { bc.fillStyle = b.color; bc.fillRect(x, y, 1, 1); }
   dirty = true;
 }
@@ -184,14 +187,30 @@ function draw() {
     // blocks, drawn as what they are; walls cast a short shadow to the south
     for (const [k, b] of S.blocks) {
       const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-      const [sx, sy] = toScreen(x, y);
-      cx.drawImage(TileArt.block(b.m, b.color, b.kind !== 'road'), sx, sy, Math.ceil(z), Math.ceil(z));
+      const [sx, sy] = toScreen(x, y), fence = b.m === 'fence';
+      cx.drawImage(TileArt.block(b.m === 'fire' && !fireLit(b) ? 'ash' : b.m, b.color, b.kind !== 'road' && !fence), sx, sy, Math.ceil(z), Math.ceil(z));
       // a wall has a face: where nothing tall stands south of it, draw its darker front and the shadow it throws
-      if (b.kind !== 'road' && S.blocks.get(`${x},${y + 1}`)?.kind !== 'wall') {
+      if (b.kind !== 'road' && !fence && S.blocks.get(`${x},${y + 1}`)?.kind !== 'wall') {
         const fh = z * 0.3; cx.globalAlpha = tileA * 0.55; cx.drawImage(TileArt.block(b.m, b.color, false), sx, sy + z, Math.ceil(z), fh);
         cx.fillStyle = `rgba(0,0,0,${0.35 * tileA})`; cx.fillRect(sx, sy + z, Math.ceil(z), fh); cx.fillStyle = `rgba(0,0,0,${0.18 * tileA})`; cx.fillRect(sx, sy + z + fh, Math.ceil(z), fh * 0.6);
         cx.globalAlpha = tileA;
       }
+    }
+    // roofs are pitched east-west: the north slope catches the light, the south slope is in shade, a ridge runs between
+    const roofA = tileA * (z >= 28 ? 0.3 : z >= 20 ? 0.7 : 1);
+    for (const [k, b] of S.roofs) {
+      const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 - 1 || y > y1) continue;
+      const [sx, sy] = toScreen(x, y);
+      cx.globalAlpha = roofA; cx.drawImage(TileArt.block(b.m, b.color, false), sx, sy, Math.ceil(z), Math.ceil(z));
+      let up = 0, dn = 0; while (up < 30 && S.roofs.has(`${x},${y - up - 1}`)) up++; while (dn < 30 && S.roofs.has(`${x},${y + dn + 1}`)) dn++;
+      if (up + dn >= 2) {
+        if (up > dn) { cx.fillStyle = 'rgba(0,0,0,.16)'; cx.fillRect(sx, sy, Math.ceil(z), Math.ceil(z)); } else if (up < dn) { cx.fillStyle = 'rgba(255,240,210,.07)'; cx.fillRect(sx, sy, Math.ceil(z), Math.ceil(z)); }
+        if (up === dn || up === dn + 1) { const ry = up === dn ? sy + z * 0.45 : sy - z * 0.05; cx.fillStyle = 'rgba(0,0,0,.28)'; cx.fillRect(sx, ry + z * 0.1, Math.ceil(z), Math.max(1, z * 0.06)); cx.fillStyle = 'rgba(255,255,255,.18)'; cx.fillRect(sx, ry, Math.ceil(z), Math.max(1, z * 0.1)); }
+      }
+      if (!S.roofs.has(`${x},${y - 1}`)) { cx.fillStyle = 'rgba(255,255,255,.16)'; cx.fillRect(sx, sy, Math.ceil(z), Math.max(1, z * 0.1)); }
+      if (!S.roofs.has(`${x},${y + 1}`)) { cx.fillStyle = 'rgba(0,0,0,.3)'; cx.fillRect(sx, sy + z * 0.88, Math.ceil(z), z * 0.12); cx.fillStyle = 'rgba(0,0,0,.22)'; cx.fillRect(sx, sy + z, Math.ceil(z), z * 0.35); }
+      if (!S.roofs.has(`${x - 1},${y}`)) { cx.fillStyle = 'rgba(255,255,255,.08)'; cx.fillRect(sx, sy, Math.max(1, z * 0.08), Math.ceil(z)); }
+      if (!S.roofs.has(`${x + 1},${y}`)) { cx.fillStyle = 'rgba(0,0,0,.18)'; cx.fillRect(sx + z * 0.92, sy, z * 0.08, Math.ceil(z)); }
     }
     cx.globalAlpha = 1;
   }
@@ -229,10 +248,10 @@ function draw() {
     // bodies carry a little warmth into the dark, and crystal and amber give light
     cx.globalCompositeOperation = 'lighter';
     for (const [k, b] of S.blocks) {
-      if (b.m !== 'crystal' && b.m !== 'lamp') continue;
+      if (b.m !== 'crystal' && b.m !== 'lamp' && !fireLit(b)) continue;
       const [x, y] = k.split(',').map(Number); if (x < x0 - 4 || x > x1 + 4 || y < y0 - 4 || y > y1 + 4) continue;
-      const [sx, sy] = toScreen(x + 0.5, y + 0.5), r = Math.max(8, z * 3.5), gl = cx.createRadialGradient(sx, sy, 0, sx, sy, r);
-      const c = b.m === 'lamp' ? '255, 190, 100' : '140, 235, 255';
+      const [sx, sy] = toScreen(x + 0.5, y + 0.5), r = Math.max(8, z * (b.m === 'fire' ? 4.5 : 3.5)), gl = cx.createRadialGradient(sx, sy, 0, sx, sy, r);
+      const c = b.m === 'crystal' ? '140, 235, 255' : b.m === 'fire' ? '255, 150, 60' : '255, 190, 100';
       gl.addColorStop(0, `rgba(${c}, ${0.5 * dark})`); gl.addColorStop(1, `rgba(${c}, 0)`); cx.fillStyle = gl; cx.fillRect(sx - r, sy - r, 2 * r, 2 * r);
     }
     for (const a of S.agents.values()) {
@@ -355,13 +374,13 @@ function applyEvent(e) {
   switch (e.type) {
     case 'join': S.agents.set(e.a, { id: e.a, name: e.name, x: e.x, y: e.y, dx: e.x, dy: e.y, state: 'active', meta: e.meta, joined: e.t }); break;
     case 'move': a.x = e.x; a.y = e.y; break;
-    case 'place': case 'build': { const k = `${e.x},${e.y}`, b = S.blocks.get(k), st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else S.blocks.set(k, { color: e.color, m: e.m, s: st, kind: kindOf(e) }); if (!S.time) paintBlock(e.x, e.y); break; }
+    case 'place': case 'build': { const k = `${e.x},${e.y}`, L = layerOf(e.kind), b = L.get(k), st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; if (e.m === 'fire') b.t = e.t; } else L.set(k, { color: e.color, m: e.m, s: st, kind: kindOf(e), t: e.t }); if (!S.time) paintBlock(e.x, e.y); break; }
     case 'die': a.state = 'dead'; S.piles.add(`${a.x},${a.y}`); break;
     case 'wake': a.state = 'active'; a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
     case 'home': S.piles.add(`${e.from[0]},${e.from[1]}`); a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
     case 'drop': S.piles.add(`${e.x},${e.y}`); break;
     case 'strike': if (e.spill && Object.keys(e.spill).length) S.piles.add(`${e.x},${e.y}`); if (e.killed) S.animals.delete(e.animal); break;
-    case 'remove': { const k = `${e.x},${e.y}`, b = S.blocks.get(k); if (b) { b.s -= e.dmg; if (b.s <= 0) S.blocks.delete(k); } if (!S.time) paintBlock(e.x, e.y); break; }
+    case 'remove': { const k = `${e.x},${e.y}`, L = e.roof ? S.roofs : S.blocks, b = L.get(k); if (b) { b.s -= e.dmg; if (b.s <= 0) L.delete(k); } if (!S.time) paintBlock(e.x, e.y); break; }
     case 'say': S.speech.push({ a: e.a, text: e.text, until: Date.now() + 9000 }); break;
     case 'rest': a.state = 'resting'; break;
     case 'leave': a.state = 'left'; break;
@@ -466,8 +485,11 @@ async function showTile(x, y, move) {
   if (t.deposit.m) facts.push(`${t.deposit.m} ${t.deposit.amt}/${t.deposit.cap}`);
   const loose = Object.entries(t.ground ?? {}).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
   if (loose) facts.push(`on the ground: ${loose}`);
-  if (t.block) facts.push(t.block.kind === 'road' ? h('span', {}, `${t.block.m === 'wood' ? 'bridge' : 'road'} by `, agentLink(t.block.by, t.block.byName))
-    : h('span', {}, h('span', { class: 'swatch', style: `background:${t.block.color}` }), ` ${t.block.m} wall, strength ${t.block.s}, by `, t.block.by === 'world' ? 'the world' : agentLink(t.block.by, t.block.byName)));
+  const byOf = b => b.by === 'world' ? 'the world' : agentLink(b.by, b.byName);
+  if (t.block) facts.push(h('span', {}, h('span', { class: 'swatch', style: `background:${t.block.color}` }),
+    t.block.m === 'fire' ? ` campfire, ${t.fireLit ? 'burning' : 'burnt out'}, by ` : t.block.kind === 'road' ? ` ${t.block.m} floor by ` : ` ${t.block.m} ${t.block.m === 'door' || t.block.m === 'fence' ? '' : 'wall'}, strength ${t.block.s}, by `, byOf(t.block)));
+  if (t.roof) facts.push(h('span', {}, h('span', { class: 'swatch', style: `background:${t.roof.color}` }), ` under a ${t.roof.m} roof by `, byOf(t.roof)));
+  if (t.sheltered) facts.push(h('span', { class: 'chip' }, 'sheltered'));
   kids.push(h('div', { class: 'row dim' }, ...(facts.length ? facts.flatMap((f, i) => i ? [' · ', f] : [f]) : ['nothing here'])));
   if (t.animals?.length) kids.push(h('div', { class: 'dim small', style: 'margin-top:4px' }, 'Nearby: ', t.animals.map(an => `${an.sp} ${an.id}${an.tamedBy ? ` (with ${S.agents.get(an.tamedBy)?.name})` : ''}`).join(', ')));
   if (t.agents.length) kids.push(h('h3', {}, 'Here & adjacent'), h('div', { class: 'row' }, ...t.agents.map(a => h('span', {}, agentLink(a.id, a.name), a.state !== 'active' ? h('span', { class: 'chip' }, a.state) : '', ' '))));
@@ -564,8 +586,8 @@ function blockCatalogue(blocks, dyes) {
   const mix = cols => { const v = cols.map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16))); return '#' + [0, 1, 2].map(k => Math.round(v.reduce((a, c) => a + c[k], 0) / v.length).toString(16).padStart(2, '0')).join(''); };
   const combos = [['ochre'], ['indigo'], ['shell'], ['ochre', 'shell'], ['indigo', 'shell'], ['ochre', 'indigo'], ['ochre', 'indigo', 'shell']];
   return h('div', {},
-    h('div', { class: 'blocks' }, ...Object.entries(blocks).map(([k, b]) => h('div', { class: 'blk' }, tex(k, b.color, !b.floor),
-      h('div', {}, h('b', {}, k), h('div', { class: 'dim small' }, Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ') + (b.floor ? ' · floor' : '') + (b.glow ? ' · glows' : '') + (b.dye ? ' · dye' : '')))))),
+    h('div', { class: 'blocks' }, ...Object.entries(blocks).map(([k, b]) => h('div', { class: 'blk' }, tex(k, b.color, !b.floor && !b.roof && !b.fence),
+      h('div', {}, h('b', {}, k), h('div', { class: 'dim small' }, Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ') + (b.roof ? ' · roof' : b.fence ? ' · fence' : b.fire ? ' · campfire' : b.floor ? ' · floor' : '') + (b.heavy ? ' · heavy' : '') + (b.glow ? ' · glows' : '') + (b.dye ? ' · dye' : '')))))),
     h('div', { class: 'dim small', style: 'margin:10px 0 4px' }, 'Dyes, alone and mixed (shown on plaster):'),
     h('div', { class: 'row' }, ...combos.map(c => { const d = mix(c.map(x => dyes[x])); const col = mix([d, d, d, blocks.plaster.color]); return h('span', { title: c.join('+') }, tex('plaster', col, true), ' '); })));
 }

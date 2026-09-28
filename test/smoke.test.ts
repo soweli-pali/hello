@@ -188,6 +188,29 @@ test('blocks and dyes', () => {
   for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [-1, 1], [1, 1]]) assert.ok(w.act(a, 'place', { block: 'stone', dx, dy }).ok);
   assert.equal(w.sheltered(a.x, a.y), false, 'one side still open');
   assert.ok(w.act(a, 'place', { block: 'door', dir: 's' }).ok);
-  assert.ok(w.sheltered(a.x, a.y), 'closed room with a door'); assert.match(w.act(a, 'look', {}).text, /sheltered/);
+  assert.equal(w.sheltered(a.x, a.y), false, 'walls without a roof');
+  assert.ok(w.act(a, 'place', { block: 'shingle', dir: 'e' }).ok, 'eaves can rest on walls');
+  assert.ok(w.act(a, 'place', { block: 'shingle', dx: 0, dy: 0 }).ok);
+  assert.ok(w.sheltered(a.x, a.y), 'closed, roofed room with a door'); assert.match(w.act(a, 'look', {}).text, /sheltered/);
+  assert.equal(w.recovery(a.x, a.y, w.now()), 3);
   assert.equal(w.step(a, a.x, a.y + 1).ap, 1, 'doors are easy for people');
+  // roofs need a wall within reach
+  const far = findTile(w, a.x + 20, a.y, (x, y) => { for (let j = -4; j <= 4; j++) for (let i = -4; i <= 4; i++) if (w.blocks.has(`${x + i},${y + j}`) || w.geo.biomeAt(x + i, y + j) === 'sea' || w.geo.biomeAt(x + i, y + j) === 'river') return false; return true; })!;
+  w.emit('move', a.id, { x: far[0], y: far[1], cost: 0 }); a.mats.wood = 10; a.mats.fiber = 4;
+  assert.match(w.act(a, 'place', { block: 'thatch', dx: 0, dy: 0 }).text, /pillar|wall/i);
+  // campfire, fence
+  assert.ok(w.act(a, 'place', { block: 'fire', dir: 'e' }).ok);
+  assert.ok(w.nearFire(a.x, a.y, 3, w.now())); assert.equal(w.recovery(a.x, a.y, w.now()), 2);
+  assert.equal(w.nearFire(a.x, a.y, 3, w.now() + 5 * 3600_000), false, 'fires burn out');
+  assert.ok(w.act(a, 'place', { block: 'fence', dir: 'w' }).ok);
+  assert.equal(w.step(a, a.x - 1, a.y).ap, 2, 'people step over fences');
+  // heavy blocks need two
+  a.mats.marble = 4;
+  assert.match(w.act(a, 'place', { block: 'marble', dir: 'n' }).text, /two|help/i);
+  const b2 = w.agents.get(w.join('Helper', {}, [a.x, a.y]).id)!;
+  assert.ok(w.act(a, 'place', { block: 'marble', dir: 'n' }).ok, 'with a helper nearby');
+  // crowding: at most two per tile
+  const c3 = w.agents.get(w.join('Third', {}, [a.x, a.y]).id)!;
+  assert.notDeepEqual([c3.x, c3.y], [a.x, a.y], 'a third body lands beside');
+  assert.ok(w.crowd(a.x, a.y) <= 2); void b2;
 });

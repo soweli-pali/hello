@@ -11,7 +11,17 @@ import type { Animal } from './fauna.ts';
 export { MATERIALS };
 export type { Material };
 // What can be built. Each block has a fixed look; plaster, cloth and gardens take dyes. The finest need far-off materials.
-export interface BlockType { needs: Partial<Record<Material, number>>; s: number; floor?: boolean; dye?: boolean; glow?: boolean; bridge?: boolean; door?: boolean; color: string; words: string }
+// Three layers per tile: the ground, one block (a wall, or a floor-level thing), and optionally a roof above.
+export interface BlockType {
+  needs: Partial<Record<Material, number>>; s: number; color: string; words: string;
+  floor?: boolean;   // walkable, fast (0.5 AP) like a road
+  roof?: boolean;    // goes on the roof layer, over a floor or bare ground; must be within 3 tiles of a wall
+  dye?: boolean; glow?: boolean; bridge?: boolean;
+  door?: boolean;    // a wall people walk through; animals can't
+  fence?: boolean;   // a low wall: animals can't cross, people step over (2 AP); doesn't close a room
+  fire?: boolean;    // burns for a while: light, warmth, and wolves keep away
+  heavy?: boolean;   // too heavy to set alone: someone else must be within reach to help
+}
 export const BLOCKS: Record<string, BlockType> = {
   stone:     { needs: { stone: 1 }, s: 4, color: '#8e8a82', words: 'rough stone wall' },
   cobble:    { needs: { stone: 1 }, s: 2, floor: true, color: '#77736b', words: 'cobbled road' },
@@ -19,7 +29,8 @@ export const BLOCKS: Record<string, BlockType> = {
   floor:     { needs: { wood: 1 }, s: 1, floor: true, bridge: true, color: '#b3875a', words: 'wooden floor (bridges water)' },
   log:       { needs: { wood: 2 }, s: 6, color: '#6a4a2c', words: 'log wall' },
   door:      { needs: { wood: 2 }, s: 3, door: true, color: '#7b5330', words: 'wooden door (people pass, animals don\'t)' },
-  thatch:    { needs: { fiber: 2 }, s: 1, color: '#c8ab5c', words: 'thatch' },
+  fence:     { needs: { wood: 1 }, s: 2, fence: true, color: '#8a6a44', words: 'wooden fence (animals can\'t cross)' },
+  fire:      { needs: { wood: 2 }, s: 1, floor: true, fire: true, glow: true, color: '#e0702a', words: 'campfire (burns about 4 hours; add wood to keep it going)' },
   brick:     { needs: { clay: 1 }, s: 3, color: '#a9573b', words: 'brick wall' },
   tile:      { needs: { clay: 1 }, s: 1, floor: true, color: '#bb6d4a', words: 'terracotta tile floor' },
   plaster:   { needs: { clay: 1, sand: 1 }, s: 2, dye: true, color: '#e4ddcf', words: 'plastered wall' },
@@ -27,12 +38,19 @@ export const BLOCKS: Record<string, BlockType> = {
   glass:     { needs: { sand: 3, wood: 1 }, s: 1, color: '#bfe3ea', words: 'glass' },
   cloth:     { needs: { fiber: 1 }, s: 1, floor: true, dye: true, color: '#e9e2d3', words: 'woven cloth' },
   garden:    { needs: { food: 1, fiber: 1 }, s: 1, floor: true, dye: true, color: '#5f8f4a', words: 'flower garden' },
-  marble:    { needs: { marble: 1 }, s: 6, color: '#eeebe4', words: 'marble' },
+  marble:    { needs: { marble: 1 }, s: 6, heavy: true, color: '#eeebe4', words: 'marble (heavy: needs a helper)' },
   mosaic:    { needs: { shell: 1, clay: 1 }, s: 1, floor: true, dye: true, color: '#efe3d6', words: 'shell mosaic floor' },
-  iron:      { needs: { ore: 1 }, s: 10, color: '#4c4f58', words: 'iron wall' },
+  iron:      { needs: { ore: 1 }, s: 10, heavy: true, color: '#4c4f58', words: 'iron wall (heavy: needs a helper)' },
   crystal:   { needs: { crystal: 1 }, s: 4, glow: true, color: '#8fe9f1', words: 'glowing crystal' },
   lamp:      { needs: { amber: 1, ore: 1 }, s: 2, glow: true, color: '#eaa53c', words: 'amber lamp' },
+  // roofs
+  thatch:    { needs: { fiber: 2 }, s: 1, roof: true, color: '#c9ab5a', words: 'thatched roof' },
+  shingle:   { needs: { wood: 1 }, s: 2, roof: true, color: '#6e5238', words: 'wooden shingle roof' },
+  rooftile:  { needs: { clay: 1 }, s: 2, roof: true, dye: true, color: '#b25a3c', words: 'clay tile roof' },
+  slate:     { needs: { stone: 1 }, s: 3, roof: true, color: '#5b6068', words: 'slate roof' },
+  skylight:  { needs: { sand: 2, wood: 1 }, s: 1, roof: true, color: '#cfe8ee', words: 'glass skylight roof' },
 };
+export const FIRE_MS = 4 * 3600_000;
 export const DYES: Record<string, string> = { ochre: '#b5532f', indigo: '#2f408c', shell: '#f2eadd' };
 function hexMix(cols: string[]) {
   const v = cols.map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)));
@@ -92,7 +110,7 @@ export interface Agent {
   joined: number; lastSeen: number; meta: Record<string, unknown>;
   hearCursor: number; // in-memory only: last event seq this agent has been shown
 }
-export interface Block { m: string; color: string; s: number; by: string; t: number; kind: 'wall' | 'road'; dye?: string[] }
+export interface Block { m: string; color: string; s: number; by: string; t: number; kind: 'wall' | 'road' | 'roof'; dye?: string[] }
 export interface Item {
   id: string; kind: Kind; title: string; body: string; author: string; t: number;
   hash: string; cites: string[]; loc: Loc; state?: unknown; mats?: Record<string, number>;
@@ -129,6 +147,7 @@ export class World {
   agents = new Map<string, Agent>();
   byName = new Map<string, string>();
   blocks = new Map<string, Block>();
+  roofs = new Map<string, Block>();
   taken = new Map<string, { amt: number; t: number }>();
   ground = new Map<string, Record<string, number>>(); // loose materials lying on tiles
   items = new Map<string, Item>();
@@ -192,14 +211,14 @@ export class World {
       }
       case 'place': case 'build': {
         if (ag) for (const [m, n] of Object.entries((e.needs ?? {}) as Record<string, number>)) ag.mats[m] -= n;
-        const k = key(e.x, e.y), b = this.blocks.get(k), bt = BLOCKS[e.m] ?? BLOCKS.stone;
-        if (b) { b.s += bt.s; }
-        else this.blocks.set(k, { m: e.m, color: e.color ?? blockColor(e.m, e.dye), s: bt.s, by: e.a ?? 'world', t: e.t, kind: bt.floor ? 'road' : 'wall', dye: e.dye });
+        const k = key(e.x, e.y), bt = BLOCKS[e.m] ?? BLOCKS.stone, layer = bt.roof ? this.roofs : this.blocks, b = layer.get(k);
+        if (b) { b.s += bt.s; if (bt.fire) b.t = e.t; } // same block again reinforces; wood on a fire keeps it burning
+        else layer.set(k, { m: e.m, color: e.color ?? blockColor(e.m, e.dye), s: bt.s, by: e.a ?? 'world', t: e.t, kind: bt.floor ? 'road' : bt.roof ? 'roof' : 'wall', dye: e.dye });
         break;
       }
       case 'remove': {
-        const k = key(e.x, e.y), b = this.blocks.get(k)!;
-        b.s -= e.dmg; if (b.s <= 0) this.blocks.delete(k); break;
+        const k = key(e.x, e.y), layer = e.roof ? this.roofs : this.blocks, b = layer.get(k)!;
+        b.s -= e.dmg; if (b.s <= 0) layer.delete(k); break;
       }
       case 'make': case 'craft': {
         if (e.type === 'craft') for (const [m, n] of Object.entries(e.needs as Record<string, number>)) ag!.mats[m] -= n;
@@ -305,22 +324,45 @@ export class World {
 
   // ---------- derived physics ----------
   apOf(a: Agent, t = this.now()) { return Math.min(this.cfg.apMax, a.ap + (t - a.apT) / 1000 / this.cfg.apSec); }
-  vigOf(a: Agent, t = this.now()) { return Math.min(this.cfg.vigorMax, a.vig + (t - a.vigT) / 1000 / this.cfg.vigorSec * (this.sheltered(a.x, a.y) ? 3 : 1)); }
-  // Inside a closed room (walls and doors all round, up to 100 tiles of floor) is shelter:
-  // wolves can't reach you, and you recover three times as fast.
+  vigOf(a: Agent, t = this.now()) { return Math.min(this.cfg.vigorMax, a.vig + (t - a.vigT) / 1000 / this.cfg.vigorSec * this.recovery(a.x, a.y, t)); }
+  // How fast a body recovers here: three times as fast sheltered, twice as fast by a fire.
+  recovery(x: number, y: number, t = this.now()) { return this.sheltered(x, y) ? 3 : this.nearFire(x, y, 3, t) ? 2 : 1; }
+  // A room is walls and doors all round (fences don't count) with a roof over every tile inside, up to 120 tiles.
+  // Inside one you are sheltered: wolves can't reach you, and you recover three times as fast.
   sheltered(x: number, y: number) {
-    if (this.blocks.get(key(x, y))?.kind === 'wall') return false;
+    const closes = (k: string) => { const b = this.blocks.get(k); return b?.kind === 'wall' && !BLOCKS[b.m]?.fence; };
+    if (closes(key(x, y)) || !this.roofs.has(key(x, y))) return false;
     const seen = new Set([key(x, y)]), todo: [number, number][] = [[x, y]];
     while (todo.length) {
       const [cx, cy] = todo.pop()!;
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nx = cx + dx, ny = cy + dy, k = key(nx, ny);
-        if (seen.has(k) || this.blocks.get(k)?.kind === 'wall') continue;
-        if (!this.geo.inside(nx, ny) || seen.size >= 100) return false;
+        if (seen.has(k) || closes(k)) continue;
+        if (!this.geo.inside(nx, ny) || seen.size >= 120 || !this.roofs.has(k)) return false;
         seen.add(k); todo.push([nx, ny]);
       }
     }
     return true;
+  }
+  fireLit(b: Block | undefined, t = this.now()) { return !!b && !!BLOCKS[b.m]?.fire && t - b.t < FIRE_MS; }
+  nearFire(x: number, y: number, r: number, t = this.now()) {
+    for (let j = -r; j <= r; j++) for (let i = -r; i <= r; i++) if (this.fireLit(this.blocks.get(key(x + i, y + j)), t)) return true;
+    return false;
+  }
+  // Bodies take up room: at most two can stand on one tile.
+  crowd(x: number, y: number, except?: string) {
+    let n = 0; for (const o of this.agents.values()) if (o.x === x && o.y === y && o.id !== except && (o.state === 'active' || o.state === 'resting')) n++;
+    return n;
+  }
+  // The nearest walkable tile with room, spiralling out from (x,y).
+  roomNear(x: number, y: number, except?: string): { x: number; y: number } {
+    for (let r = 0; r < 12; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const nx = x + dx, ny = y + dy, b = this.blocks.get(key(nx, ny));
+      if (!this.geo.inside(nx, ny) || isWater(this.geo.biomeAt(nx, ny)) || (b?.kind === 'wall' && !BLOCKS[b.m]?.door)) continue;
+      if (this.crowd(nx, ny, except) < 2) return { x: nx, y: ny };
+    }
+    return { x, y };
   }
   terrain(x: number, y: number) { return this.geo.depositAt(x, y); }
   depositAt(x: number, y: number, t = this.now()) {
@@ -368,7 +410,7 @@ export class World {
     if (blk?.kind === 'road') return { ap: 0.5, dv: 0, b }; // any floor: roads, bridges, paved squares
     if (blk && BLOCKS[blk.m]?.door) return { ap: 1, dv: 0, b }; // people walk through doors
     const boat = isWater(b) && this.has(a, 'boat');
-    const ap = (boat ? 1 : info.cost) + (blk ? blk.s : 0);
+    const ap = (boat ? 1 : info.cost) + (blk ? (BLOCKS[blk.m]?.fence ? 1 : blk.s) : 0); // step over a fence; push through a wall
     const dv = boat || this.safe(x, y) || (info.guard && this.has(a, info.guard)) ? 0 : info.drain;
     return { ap, dv, b };
   }
@@ -381,16 +423,12 @@ export class World {
     if (this.byName.has(name.toLowerCase())) throw new Error('name taken');
     const id = 'a' + (this.seq + 1);
     if (at && !(this.geo.inside(at[0], at[1]))) throw new Error('that place is outside the world');
-    const e = this.emit('join', id, { name, ...(at ? { x: Math.trunc(at[0]), y: Math.trunc(at[1]) } : this.spawnSpot()), meta });
+    const e = this.emit('join', id, { name, ...(at ? this.roomNear(Math.trunc(at[0]), Math.trunc(at[1])) : this.spawnSpot()), meta });
     return { id: e.a!, token: this.issueToken(e.a!) };
   }
-  spawnSpot(): { x: number; y: number } { const [sx, sy] = this.spawn(); return { x: sx + Math.floor(Math.random() * 5) - 2, y: sy + Math.floor(Math.random() * 5) - 2 }; }
-  // Near an agent's home, on a tile that isn't water if one is close.
-  homeSpot(a: Agent): { x: number; y: number } {
-    const [hx, hy] = a.home;
-    for (let i = 0; i < 12; i++) { const x = hx + Math.floor(Math.random() * 3) - 1, y = hy + Math.floor(Math.random() * 3) - 1, b = this.geo.biomeAt(x, y); if (b !== 'sea' && b !== 'river') return { x, y }; }
-    return { x: hx, y: hy };
-  }
+  spawnSpot(): { x: number; y: number } { const [sx, sy] = this.spawn(); return this.roomNear(sx + Math.floor(Math.random() * 5) - 2, sy + Math.floor(Math.random() * 5) - 2); }
+  // Near an agent's home: the closest spot with room.
+  homeSpot(a: Agent): { x: number; y: number } { return this.roomNear(a.home[0], a.home[1], a.id); }
   issueToken(agent: string) {
     const token = randomBytes(24).toString('base64url');
     this.db.prepare('INSERT INTO tokens VALUES (?,?)').run(sha(token), agent);
@@ -420,7 +458,7 @@ export class World {
   // Wolves bite at night, when you are close, outside the safe ground, without a lantern.
   dangers(a: Agent): string {
     const t = this.now();
-    if (!this.night(t) || this.safe(a.x, a.y) || this.sheltered(a.x, a.y) || this.has(a, 'lantern') || t - a.lastBite < 45_000) return '';
+    if (!this.night(t) || this.safe(a.x, a.y) || this.sheltered(a.x, a.y) || this.has(a, 'lantern') || this.nearFire(a.x, a.y, 3, t) || t - a.lastBite < 45_000) return '';
     const wolf = this.animalsNear(a.x, a.y, 1, t).find(({ an }) => SPECIES[an.sp].bites && !an.tamedBy);
     if (!wolf) return '';
     this.emit('hurt', a.id, { cause: 'wolf', animal: wolf.an.id, dv: -SPECIES.wolf.bites! });
@@ -480,15 +518,32 @@ export class World {
     if (dye.length && !bt.dye) throw new Error(`${type} can't be dyed.`);
     this.near(a, tx, ty);
     if (!this.geo.inside(tx, ty)) throw new Error('Outside the world.');
-    const b = this.blocks.get(key(tx, ty)), water = isWater(this.geo.biomeAt(tx, ty));
-    if (water && !bt.bridge) throw new Error('Only a wooden floor can be laid on water.');
-    if (b && (b.m !== type || bt.floor)) throw new Error(`There is already ${BLOCKS[b.m]?.words ?? b.m} there; remove it first.`);
+    const k = key(tx, ty), under = this.blocks.get(k), water = isWater(this.geo.biomeAt(tx, ty));
+    const b = bt.roof ? this.roofs.get(k) : under;
+    if (bt.roof) {
+      if (water && under?.m !== 'floor') throw new Error('A roof over water needs a wooden floor under it.');
+      if (b) throw new Error(`There is already a ${BLOCKS[b.m]?.words ?? b.m} there.`);
+      // a roof needs something to rest on: a wall within 3 tiles (so big halls need pillars)
+      let held = false;
+      for (let j = -3; j <= 3 && !held; j++) for (let i = -3; i <= 3 && !held; i++) { const w = this.blocks.get(key(tx + i, ty + j)); if (w?.kind === 'wall' && !BLOCKS[w.m]?.fence) held = true; }
+      if (!held) throw new Error('A roof needs a wall within 3 tiles to rest on. Big halls need pillars.');
+    } else {
+      if (water && !bt.bridge) throw new Error('Only a wooden floor can be laid on water.');
+      if (b && (b.m !== type || (bt.floor && !bt.fire))) throw new Error(`There is already ${BLOCKS[b.m]?.words ?? b.m} there; remove it first.`);
+      if (!bt.floor && !bt.door && !b && this.crowd(tx, ty) > 0) throw new Error('Someone is standing there.');
+    }
     const needs: Record<string, number> = { ...bt.needs } as Record<string, number>; for (const d of dye) needs[d] = (needs[d] ?? 0) + 1;
     const short = Object.entries(needs).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} more ${m}`);
     if (short.length) throw new Error(`A ${type} needs ${short.join(', ')}.`);
+    if (bt.heavy) {
+      const helper = [...this.agents.values()].find(o => o.id !== a.id && o.state === 'active' && this.dist(o.x, o.y, tx, ty) <= this.cfg.reach);
+      if (!helper) throw new Error(`${type} is too heavy to set alone: someone else must be within ${this.cfg.reach} tiles of the spot to help lift it.`);
+    }
     this.need(a, 1);
-    this.emit('place', a.id, { x: tx, y: ty, m: type, kind: bt.floor ? 'road' : 'wall', dye: dye.length ? dye : undefined, needs, color: blockColor(type, dye), cost: 1 });
-    return { ok: true, text: b ? `You reinforced the ${bt.words} ${this.at(a, tx, ty)}.` : `You placed ${bt.words}${dye.length ? ` dyed ${dye.join('+')}` : ''} ${this.at(a, tx, ty)}.` };
+    this.emit('place', a.id, { x: tx, y: ty, m: type, kind: bt.floor ? 'road' : bt.roof ? 'roof' : 'wall', dye: dye.length ? dye : undefined, needs, color: blockColor(type, dye), cost: 1 });
+    const where = this.at(a, tx, ty);
+    if (bt.fire && b) return { ok: true, text: `You fed the fire ${where}; it will burn about 4 more hours.` };
+    return { ok: true, text: b ? `You reinforced the ${bt.words} ${where}.` : `You placed ${bt.words}${dye.length ? ` dyed ${dye.join('+')}` : ''} ${where}.${this.sheltered(a.x, a.y) ? ' You are sheltered here now.' : ''}` };
   }
 
   // Run an object's handler and turn its (validated) wishes into one 'use' event.
@@ -571,7 +626,7 @@ export const VERBS: Record<string, Verb> = {
       } else if (x.x !== undefined && x.y !== undefined) dest = w.target(a, x);
       else throw new Error('move needs dir (+steps), toward, or to:"home"');
       let cx = a.x, cy = a.y, cost = 0, dv = 0; const notes: string[] = []; let why = '';
-      const vig0 = w.vigOf(a);
+      const vig0 = w.vigOf(a), path: { x: number; y: number; ap: number; dv: number }[] = [];
       for (let i = 0; i < steps; i++) {
         let sx = dx, sy = dy;
         if (dest) { sx = Math.sign(dest[0] - cx); sy = Math.sign(dest[1] - cy); if (!sx && !sy) break; }
@@ -580,9 +635,15 @@ export const VERBS: Record<string, Verb> = {
         const s = w.step(a, nx, ny);
         if (w.apOf(a) < cost + s.ap) { why = i ? `You stopped after ${i} of ${dest ? 'the' : steps} steps: out of AP.` : `Not enough AP for that step (needs ${s.ap}; AP regenerates).`; break; }
         if (vig0 - dv - s.dv <= 0 && !(x.force === true || x.force === 'true')) { why = `Another step would kill you (vigor ${(vig0 - dv).toFixed(1)}). Rest, eat, or pass force:true.`; break; }
-        cost += s.ap; dv += s.dv; cx = nx; cy = ny;
-        if (w.blocks.get(key(nx, ny))?.kind === 'wall') notes.push('pushed through a wall');
+        cost += s.ap; dv += s.dv; cx = nx; cy = ny; path.push({ x: nx, y: ny, ap: s.ap, dv: s.dv });
+        const blk = w.blocks.get(key(nx, ny));
+        if (blk?.kind === 'wall' && !BLOCKS[blk.m]?.door) notes.push(BLOCKS[blk.m]?.fence ? 'stepped over a fence' : 'pushed through a wall');
         if (dv >= vig0) break;
+      }
+      // you can pass through a crowd, but you can't stop where two already stand
+      while (path.length && w.crowd(cx, cy, a.id) >= 2) {
+        const last = path.pop()!; cost -= last.ap; dv -= last.dv;
+        const prev = path.at(-1) ?? { x: a.x, y: a.y }; cx = prev.x; cy = prev.y; why = 'It was too crowded to stop further on.';
       }
       if (cx === a.x && cy === a.y) return { ok: false, text: why || 'You did not move.' };
       w.emit('move', a.id, { x: cx, y: cy, cost, dv: dv ? -+dv.toFixed(2) : undefined });
@@ -645,19 +706,19 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   place: {
-    help: `Place a block within reach, made from materials you carry. Walls are slow to push through; placing the same wall again reinforces it. Floors (cobble, floor, tile, cloth, garden, mosaic) cost only 0.5 AP to cross, like roads; wooden floor bridges water. Blocks marked dye can be coloured with ochre, indigo and/or shell (1 of each dye used; mixing makes new colours). Blocks: ${Object.entries(BLOCKS).map(([k, b]) => `${k} (${Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ')}${b.floor ? ', floor' : ''}${b.dye ? ', dye' : ''}${b.glow ? ', glows' : ''})`).join('; ')}. 1 AP.`,
+    help: `Place a block within reach. Building needs only the materials, no tools. Walls are slow to push through; placing the same wall again reinforces it. Floors cost only 0.5 AP to cross, like roads; wooden floor bridges water. Roofs go on a layer above walls, floors or bare ground and must be within 3 tiles of a wall (big halls need pillars). A closed room (walls and doors all round, roofed over every tile inside) is shelter. Heavy blocks need someone else nearby to help lift. At most two people fit on one tile. Dye blocks take ochre, indigo and/or shell (1 of each; mixing makes new colours). Blocks: ${Object.entries(BLOCKS).map(([k, b]) => `${k} (${Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ')}${b.floor ? ', floor' : ''}${b.roof ? ', roof' : ''}${b.door ? ', door' : ''}${b.fence ? ', fence' : ''}${b.dye ? ', dye' : ''}${b.glow ? ', glows' : ''}${b.heavy ? ', heavy' : ''}${b.fire ? ', fire' : ''})`).join('; ')}. 1 AP.`,
     args: { block: Object.keys(BLOCKS).join('|'), dye: 'optional: ochre, indigo, shell, or several, e.g. "ochre+shell"', ...AIM },
     run: (w, a, x) => { const [tx, ty] = w.target(a, x); return w.placeBlock(a, x.block ?? MAT_BLOCK[x.material] ?? x.material, x.dye, tx, ty); },
   },
   remove: {
-    help: 'Break down a wall or road within reach. Each call removes up to 2 strength for 2 AP. Materials are not recovered.',
+    help: 'Break down a block within reach (a roof comes off before what is under it). Each call removes up to 2 strength for 2 AP. Materials are not recovered.',
     args: { ...AIM },
     run: (w, a, x) => {
       const [tx, ty] = w.target(a, x); w.near(a, tx, ty);
-      const b = w.blocks.get(key(tx, ty)); if (!b) throw new Error('No block there.');
+      const roof = w.roofs.get(key(tx, ty)), b = roof ?? w.blocks.get(key(tx, ty)); if (!b) throw new Error('No block there.');
       w.need(a, 2); const dmg = Math.min(2, b.s);
-      w.emit('remove', a.id, { x: tx, y: ty, dmg, cost: 2 });
-      return { ok: true, text: b.s - dmg > 0 ? `It weakened (strength ${b.s - dmg} left).` : 'It is gone.' };
+      w.emit('remove', a.id, { x: tx, y: ty, dmg, roof: roof ? true : undefined, cost: 2 });
+      return { ok: true, text: b.s - dmg > 0 ? `It weakened (strength ${b.s - dmg} left).` : `The ${BLOCKS[b.m]?.words ?? b.m} is gone.` };
     },
   },
   make: {
@@ -864,7 +925,8 @@ export function rulesText(cfg: Config) {
     cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
       : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at your home (where you first arrived) with nothing, remembering what you remember.`,
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
-    `- Inside a closed room (walls all round; doors let people through but not animals) you are sheltered: wolves can't reach you there, and you recover vigor three times as fast.`,
+    `- Building needs only materials, no tools. A closed room (walls and doors all round, with a roof over every tile inside) is shelter: wolves can't reach you there, and you recover vigor three times as fast. By a burning campfire you recover twice as fast and wolves keep away.`,
+    `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks (marble, iron) take two to lift.`,
     `- move {"to":"home"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
     `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
     `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less.`,
@@ -907,7 +969,8 @@ function describeTile(w: World, a: Agent, x: number, y: number) {
   return [`${x === a.x && y === a.y ? '' : rel(a, x, y) + ': '}${BIOME_INFO[w.geo.biomeAt(x, y)].words}${w.safe(x, y) ? ' (safe ground)' : ''}${w.sheltered(x, y) ? ' (sheltered)' : ''}.`,
     d.m ? `${d.m} ${d.amt}/${d.cap}.` : '',
     g ? `On the ground: ${g}.` : '',
-    b ? `${(BLOCKS[b.m]?.words ?? b.m).replace(/^./, c => c.toUpperCase())}${b.dye ? ` dyed ${b.dye.join('+')}` : ''}${b.kind === 'wall' ? `, strength ${b.s}` : ''}, built by ${b.by === 'world' ? 'no one you know' : w.agents.get(b.by)?.name}.` : '',
+    b ? `${(BLOCKS[b.m]?.words ?? b.m).replace(/^./, c => c.toUpperCase())}${b.dye ? ` dyed ${b.dye.join('+')}` : ''}${b.kind === 'wall' ? `, strength ${b.s}` : ''}${BLOCKS[b.m]?.fire ? (w.fireLit(b) ? ', burning' : ', burnt out') : ''}, built by ${b.by === 'world' ? 'no one you know' : w.agents.get(b.by)?.name}.` : '',
+    w.roofs.get(key(x, y)) ? `Under a ${BLOCKS[w.roofs.get(key(x, y))!.m]?.words ?? 'roof'}.` : '',
     its.length ? `Items: ${fmtItems(its)}.` : '',
     who.length ? `Agents: ${who.join(', ')}.` : ''].filter(Boolean).join(' ');
 }
@@ -950,13 +1013,15 @@ export function observe(w: World, a: Agent, detail = 1): string {
         const o = others.find(o => o.x === x && o.y === y);
         if (o) { if (!legend.has(o.name)) legend.set(o.name, String(digit++ % 10)); row += legend.get(o.name); continue; }
         const be = beasts.find(({ p }) => p[0] === x && p[1] === y); if (be) { row += SPECIES[be.an.sp].map; continue; }
-        const b = w.blocks.get(key(x, y)); if (b) { row += b.kind === 'road' ? '=' : '#'; continue; }
+        const b = w.blocks.get(key(x, y)), bt = b && BLOCKS[b.m];
+        if (b) { row += bt?.fire ? '!' : bt?.door ? '+' : bt?.fence ? '%' : b.kind === 'road' ? (w.roofs.has(key(x, y)) ? '&' : '=') : '#'; continue; }
+        if (w.roofs.has(key(x, y))) { row += '&'; continue; }
         if (w.itemsAt({ t: [x, y] }).length || fmtMats(w.ground.get(key(x, y)) ?? {})) { row += '*'; continue; }
         const d = w.depositAt(x, y); row += d.m && d.rich && d.amt > 0 ? LETTER[d.m] : BIOME_INFO[w.geo.biomeAt(x, y)].map;
       }
       rows.push(row);
     }
-    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, = floor/road, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water; deposits S stone W wood C clay N sand F fiber B berries (food) O ore X crystal M marble R ochre I indigo H shell Y amber):`);
+    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, + door, % fence, ! campfire, = floor/road, & under a roof, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water; deposits S stone W wood C clay N sand F fiber B berries (food) O ore X crystal M marble R ochre I indigo H shell Y amber):`);
     out.push(rows.join('\n'));
     if (legend.size) out.push(`Key: ${[...legend].map(([n, d]) => `${d}=${n}`).join(' ')}`);
   }

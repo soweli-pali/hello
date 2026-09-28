@@ -139,7 +139,21 @@ const TileArt = (() => {
       case 'floor': for (let i = 0; i < 4; i++) { F(0.78, i * 4 + 3, 0, 1, PX); F(0.9, i * 4 + 1, (i * 7) % 12 + 2, 1, 2); } break;
       case 'log': for (let j = 0; j < 3; j++) { F(0.65, 0, j * 5 + 4, PX, 1); F(1.15, 0, j * 5, PX, 1); g.fillStyle = rgb(col, 1.4); g.beginPath(); g.arc(14, j * 5 + 2.3, 1.6, 0, 7); g.fill(); } break;
       case 'door': F(0.8, 0, 0, PX, PX); F(1, 2, 1, 12, 15); for (let i = 0; i < 3; i++) F(0.78, 5 + i * 3, 1, 1, 15); F(0.6, 2, 5, 12, 1); F(0.6, 2, 11, 12, 1); g.fillStyle = '#e0c070'; g.fillRect(11, 8, 2, 2); break;
-      case 'thatch': for (let i = -PX; i < PX; i += 2) { g.strokeStyle = rgb(col, i % 4 ? 0.8 : 1.15); g.beginPath(); g.moveTo(i, PX); g.lineTo(i + PX, 0); g.stroke(); } break;
+      // roofs: courses of straw, wood, clay, stone or glass, lapped so the eave is darker than the ridge
+      case 'thatch': for (let j = 0; j < 4; j++) { F(0.72, 0, j * 4 + 3, PX, 1); for (let i = 0; i < 8; i++) F(i % 3 ? 1.12 : 0.88, i * 2 + (j % 2), j * 4, 1, 3); } break;
+      case 'shingle': for (let j = 0; j < 4; j++) { F(0.62, 0, j * 4 + 3, PX, 1); F(1.1, 0, j * 4, PX, 1); for (let i = 0; i < 4; i++) { F(0.7, (i * 4 + (j % 2) * 2) % PX, j * 4, 1, 3); F(0.92 + ((i * 3 + j * 5) % 4) * 0.05, (i * 4 + (j % 2) * 2 + 1) % PX, j * 4 + 1, 3, 2); } } break;
+      case 'rooftile': for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) { const x = i * 4 + (j % 2) * 2 - 2, y = j * 4; g.fillStyle = rgb(col, 1.12); g.beginPath(); g.arc(x + 2, y + 1, 2, 0, Math.PI); g.fill(); g.fillStyle = rgb(col, 0.62); g.fillRect(x, y + 3, 4, 1); g.fillStyle = rgb(col, 0.8); g.fillRect(x + 3, y, 1, 3); } break;
+      case 'slate': for (let j = 0; j < 4; j++) { F(0.6, 0, j * 4 + 3, PX, 1); for (let i = 0; i < 3; i++) { const x = (i * 6 + (j % 2) * 3) % PX; F(0.72, x, j * 4, 1, 3); F(0.95 + ((i + j * 2) % 3) * 0.07, x + 1, j * 4, 4, 1); } } break;
+      case 'skylight': F(0.62, 0, 0, PX, PX); g.fillStyle = 'rgba(200,232,240,.85)'; g.fillRect(2, 2, 5, 5); g.fillRect(9, 2, 5, 5); g.fillRect(2, 9, 5, 5); g.fillRect(9, 9, 5, 5); g.fillStyle = 'rgba(255,255,255,.9)'; g.fillRect(3, 3, 2, 1); g.fillRect(10, 10, 2, 1); break;
+      case 'fence': g.clearRect(0, 0, PX, PX); g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(1, 12, 14, 2); F(1, 0, 5, PX, 2); F(1, 0, 10, PX, 2); F(1.2, 0, 5, PX, 1); F(0.8, 2, 3, 2, 11); F(0.8, 12, 3, 2, 11); F(1.25, 2, 3, 2, 1); F(1.25, 12, 3, 2, 1); break;
+      case 'fire': case 'ash': {
+        g.clearRect(0, 0, PX, PX);
+        g.fillStyle = type === 'ash' ? '#3a3632' : '#2a1d14'; g.beginPath(); g.arc(8, 8.5, 4.5, 0, 7); g.fill();
+        for (let i = 0; i < 8; i++) { const an = i / 8 * Math.PI * 2; g.fillStyle = i % 2 ? '#8d8a82' : '#a5a198'; g.beginPath(); g.arc(8 + Math.cos(an) * 5.6, 8.5 + Math.sin(an) * 5.6, 1.7, 0, 7); g.fill(); }
+        if (type === 'fire') { g.fillStyle = '#e0702a'; g.beginPath(); g.moveTo(8, 2); g.quadraticCurveTo(12.5, 8, 10.5, 11); g.lineTo(5.5, 11); g.quadraticCurveTo(3.5, 8, 8, 2); g.fill(); g.fillStyle = '#ffd36a'; g.beginPath(); g.moveTo(8, 5.5); g.quadraticCurveTo(10.5, 9, 9.5, 11); g.lineTo(6.5, 11); g.quadraticCurveTo(5.5, 9, 8, 5.5); g.fill(); }
+        else { g.fillStyle = '#6a625a'; g.fillRect(6, 8, 4, 1); g.fillRect(7, 10, 3, 1); }
+        break;
+      }
       case 'brick': for (let j = 0; j < 4; j++) { F(0.62, 0, j * 4 + 3, PX, 1); for (let i = 0; i < 3; i++) F(0.62, ((i * 6 + (j % 2) * 3) % PX), j * 4, 1, 3); F(1.12, 1, j * 4, PX - 2, 1); } break;
       case 'tile': F(0.75, 7, 0, 1, PX); F(0.75, 15, 0, 1, PX); F(0.75, 0, 7, PX, 1); F(0.75, 0, 15, PX, 1); F(1.12, 1, 1, 5, 1); F(1.12, 9, 9, 5, 1); break;
       case 'plaster': F(0.9, 0, 0, PX, 1); F(0.9, 0, 0, 1, PX); for (let i = 0; i < 6; i++) F(0.94 + (i % 2) * 0.08, (i * 5) % 14 + 1, (i * 7) % 14 + 1, 1, 1); break;
