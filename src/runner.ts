@@ -191,7 +191,7 @@ export function bot(c: AgentConf): Provider {
   const rnd = () => ((s = (Math.imul(s ^ (s >>> 15), 2246822507) + 0x9e3779b9) >>> 0) / 4294967296);
   const pick = <T,>(a: T[]) => a[Math.floor(rnd() * a.length)];
   const dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
-  let heading = pick(dirs), huts = 0;
+  let heading = pick(dirs), huts = 0, checks = 0, hutWall = 'stone';
   // the bot's own plan, kept here in its harness: a hut ring around where it stands, with a door to the south
   let plan: { dx: number; dy: number; block: string }[] = [];
   const lines = ['hello', 'the light is nice here', 'found some stone', 'building a little house', 'hm', 'anyone around?', 'this spot is quiet', 'the berries here are good', 'saw a wolf earlier'];
@@ -205,21 +205,31 @@ export function bot(c: AgentConf): Provider {
     if (vig < 2.5) { plan = []; return act('rest'); }
     if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.3) return act('say', { text: pick(['hello!', 'hi there', 'hey']) });
     // building: one block per turn until the plan is done or materials run out
+    if (!plan.length && checks > 0) {
+      checks--;
+      const rows = (/Map \([^\n]*\n((?:[^\n]+\n?)+)/.exec(user)?.[1] ?? '').split('\n').filter(Boolean), cy = rows.findIndex(r => r.includes('@')), cx = cy >= 0 ? rows[cy].indexOf('@') : -1;
+      if (cy >= 0) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (Math.max(Math.abs(dx), Math.abs(dy)) === 2 && !'#+%'.includes(rows[cy + dy]?.[cx + dx] ?? '#')) plan.push({ dx, dy, block: hutWall });
+    }
     if (plan.length) {
       const p = plan.shift()!;
       if (p.block === 'ROOF') { const r = ([['wood', 'shingle', 1], ['clay', 'rooftile', 1], ['stone', 'slate', 1], ['fiber', 'thatch', 2]] as [string, string, number][]).find(([m, , k]) => (mats[m] ?? 0) >= k); if (!r) return act('look'); p.block = r[1]; }
       return act('place', { block: p.block, dx: p.dx, dy: p.dy });
     }
     const wall = BOT_WALLS.filter(([m, , k]) => (mats[m] ?? 0) >= 15 * k).sort((x, y) => (mats[y[0]] ?? 0) - (mats[x[0]] ?? 0))[0];
-    const floor = wall && BOT_FLOORS.find(([m]) => (mats[m] ?? 0) - (wall[0] === m ? 15 * wall[2] : 0) >= 9);
-    if (wall && huts < 2 && !/^Here: (open water|a river)/m.test(user)) {
+    // a hut needs walls and a roof: only start once there's enough for both (the roof alone is 9 wood, clay or stone, or 18 fiber);
+    // a floor only from what's left after both
+    const spare = (m: string) => (mats[m] ?? 0) - (wall && wall[0] === m ? 15 * wall[2] : 0) - (m === 'wood' ? 2 : 0);
+    const roofMat = ([['wood', 1], ['clay', 1], ['stone', 1], ['fiber', 2]] as [string, number][]).find(([m, k]) => spare(m) >= 9 * k), roofable = !!roofMat;
+    const floor = wall && BOT_FLOORS.find(([m]) => spare(m) - (roofMat?.[0] === m ? 9 * roofMat[1] : 0) >= 9);
+    if (wall && roofable && huts < 2 && !/^Here: (open water|a river)/m.test(user)) {
       huts++;
       for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
         const ring = Math.max(Math.abs(dx), Math.abs(dy));
         if (ring === 2 && !(dx === 0 && dy === 2)) plan.push({ dx, dy, block: wall[1] });
         else if (ring < 2 && floor) plan.push({ dx, dy, block: floor[1] });
       }
-      plan.push({ dx: 0, dy: 2, block: (mats.wood ?? 0) - (wall[0] === 'wood' ? 15 : 0) - (floor?.[0] === 'wood' ? 9 : 0) >= 2 ? 'door' : floor?.[1] ?? 'cobble' }); // a door, if there's wood for one
+      plan.push({ dx: 0, dy: 2, block: (mats.wood ?? 0) - (wall[0] === 'wood' ? 15 : 0) - (floor?.[0] === 'wood' ? 9 : 0) >= 2 ? 'door' : wall[1] }); // a door if there's wood for one, else a wall (walls can be pushed through)
+      checks = 2; hutWall = wall[1];
       // and a roof over the inside, from whatever is left, so the hut is real shelter
       // (chosen tile by tile when it gets there, from whatever it carries by then)
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) plan.push({ dx, dy, block: 'ROOF' });
