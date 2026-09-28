@@ -30,6 +30,7 @@ const YIELD: Partial<Record<Biome, Partial<Record<Material, number>>>> = {
   beach: { sand: 5, food: 0.5 },
 };
 const DENSITY: Partial<Record<Biome, number>> = { meadow: 0.74, forest: 0.7, marsh: 0.71, desert: 0.8, tundra: 0.8, mountain: 0.74, peak: 0.82, beach: 0.8 };
+const AMBIENT: Partial<Record<Biome, [Material, number]>> = { forest: ['wood', 2], mountain: ['stone', 2], desert: ['sand', 2], beach: ['sand', 1], marsh: ['clay', 1], meadow: ['fiber', 1], tundra: ['stone', 1] };
 export const REGROW: Record<Material, number> = { stone: 1, wood: 1, clay: 1, sand: 1, fiber: 0.7, food: 0.4, ore: 5, crystal: 12, marble: 4, ochre: 3, indigo: 3, shell: 2, amber: 6 }; // × regenSec
 
 export function hash(x: number, y: number, s: number) {
@@ -48,10 +49,10 @@ const fbm = (x: number, y: number, scale: number, s: number) =>
 
 export class Geo {
   w: number; h: number; seed: number;
-  biome: Uint8Array; mat: Uint8Array; cap: Uint8Array; elev: Uint8Array;
+  biome: Uint8Array; mat: Uint8Array; cap: Uint8Array; elev: Uint8Array; rich: Uint8Array;
   constructor(w: number, h: number, seed: number) {
     this.w = w; this.h = h; this.seed = seed;
-    const n = w * h; this.biome = new Uint8Array(n); this.mat = new Uint8Array(n); this.cap = new Uint8Array(n); this.elev = new Uint8Array(n);
+    const n = w * h; this.biome = new Uint8Array(n); this.mat = new Uint8Array(n); this.cap = new Uint8Array(n); this.elev = new Uint8Array(n); this.rich = new Uint8Array(n);
     const S = seed * 97;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x;
@@ -94,7 +95,7 @@ export class Geo {
         }
         const rich = noise(x, y, 11, S + 60);
         const th = DENSITY[b]!;
-        if (best && bv > th && rich > 0.52) { this.mat[i] = MATERIALS.indexOf(best) + 1; this.cap[i] = Math.max(1, Math.min(9, 1 + Math.floor((bv - th) * 30 * rich))); }
+        if (best && bv > th && rich > 0.44) { this.mat[i] = MATERIALS.indexOf(best) + 1; this.cap[i] = Math.max(1, Math.min(9, 1 + Math.floor((bv - th) * 30 * rich))); }
       }
       // ore: small veins in the mountains. crystal: rare glints on peaks and deep desert.
       if (b === 'mountain' && noise(x, y, 4, S + 70) > 0.84 && noise(x, y, 40, S + 71) > 0.45) { this.mat[i] = MATERIALS.indexOf('ore') + 1; this.cap[i] = 2 + Math.floor(hash(x, y, S + 72) * 4); }
@@ -105,14 +106,17 @@ export class Geo {
       if (b === 'marsh' && noise(x, y, 5, S + 92) > 0.85 && noise(x, y, 80, S + 98) > 0.62) put('indigo', 1, 3);
       if (b === 'beach' && hash(x, y, S + 96) < 0.05 && noise(x, y, 60, S + 100) > 0.5) put('shell', 1, 3);
       if (b === 'forest' && noise(x, y, 4, S + 93) > 0.87 && noise(x, y, 90, S + 94) > 0.66) put('amber', 1, 2);
-      if ((b === 'peak' || (b === 'desert' && t > 0.8)) && hash(x, y, S + 80) < 0.006) { this.mat[i] = MATERIALS.indexOf('crystal') + 1; this.cap[i] = 1 + Math.floor(hash(x, y, S + 81) * 2); }
+      if (this.mat[i]) this.rich[i] = 1;
+      // everywhere else, the land yields a little of what it obviously is
+      else { const amb = AMBIENT[b]; if (amb) { this.mat[i] = MATERIALS.indexOf(amb[0]) + 1; this.cap[i] = amb[1]; } }
+      if ((b === 'peak' || (b === 'desert' && t > 0.8)) && hash(x, y, S + 80) < 0.006) { this.mat[i] = MATERIALS.indexOf('crystal') + 1; this.cap[i] = 1 + Math.floor(hash(x, y, S + 81) * 2); this.rich[i] = 1; }
     }
   }
   inside(x: number, y: number) { return x >= 0 && y >= 0 && x < this.w && y < this.h; }
   biomeAt(x: number, y: number): Biome { return this.inside(x, y) ? BIOMES[this.biome[y * this.w + x]] : 'sea'; }
-  depositAt(x: number, y: number): { m: Material | null; cap: number } {
-    if (!this.inside(x, y)) return { m: null, cap: 0 };
-    const i = y * this.w + x; return this.mat[i] ? { m: MATERIALS[this.mat[i] - 1], cap: this.cap[i] } : { m: null, cap: 0 };
+  depositAt(x: number, y: number): { m: Material | null; cap: number; rich: boolean } {
+    if (!this.inside(x, y)) return { m: null, cap: 0, rich: false };
+    const i = y * this.w + x; return this.mat[i] ? { m: MATERIALS[this.mat[i] - 1], cap: this.cap[i], rich: !!this.rich[i] } : { m: null, cap: 0, rich: false };
   }
   // A good default arrival point: the meadow or forest tile nearest the middle that is well inland.
   landing(): [number, number] {
@@ -127,5 +131,5 @@ export class Geo {
     return [cx, cy];
   }
   // one byte per tile for the viewer: biome in the high nibble, deposit material in the low
-  bytes() { const b = new Uint8Array(this.w * this.h); for (let i = 0; i < b.length; i++) b[i] = (this.biome[i] << 4) | this.mat[i]; return b; }
+  bytes() { const b = new Uint8Array(this.w * this.h); for (let i = 0; i < b.length; i++) b[i] = (this.biome[i] << 4) | (this.rich[i] ? this.mat[i] : 0); return b; }
 }

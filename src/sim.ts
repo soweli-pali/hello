@@ -62,15 +62,23 @@ async function turn(b: Body) {
 }
 
 const end = clock + hours * 3600_000; let lastReport = clock;
+// Every agent thinks independently. The clock moves on while calls are in flight, but never past the moment an
+// in-flight agent was due to act again, so nobody falls behind; slow thinkers just see a world that moved a little.
+const inflight = new Map<Body, { started: number; p: Promise<void> }>();
+const period = (b: Body) => (b.c.interval ?? (b.bot ? 20 : 180)) * 1000;
 while (clock < end) {
-  // jump to the next moment anyone acts, and let everyone due within half a minute act together
-  const soonest = Math.min(...bodies.map(b => b.next));
-  clock = Math.min(end, Math.max(clock + step, soonest === Infinity ? end : soonest));
-  const due = bodies.filter(b => b.next <= clock + (bodies.some(b => !b.bot) ? 30_000 : 0));
-  for (const b of due.filter(b => b.bot)) await turn(b);
-  const llm = due.filter(b => !b.bot);
-  for (let i = 0; i < llm.length; i += cap) await Promise.all(llm.slice(i, i + cap).map(turn)); // the world waits for them
+  for (const b of bodies) if (!inflight.has(b) && b.next <= clock) {
+    const p = turn(b).finally(() => inflight.delete(b));
+    inflight.set(b, { started: clock, p });
+  }
+  for (let i = 0; i < 3; i++) await Promise.resolve(); // let bots (which answer at once) finish
+  const idle = bodies.filter(b => !inflight.has(b)), idleNext = Math.min(...idle.map(b => b.next));
+  const limit = Math.min(...[...inflight].map(([b, f]) => f.started + period(b)));
+  if (idleNext <= limit && idleNext < Infinity) clock = Math.min(end, Math.max(clock + (inflight.size ? 0 : 0), idleNext));
+  else if (inflight.size) { await Promise.race([...inflight.values()].map(f => f.p)); if (limit < Infinity) clock = Math.min(end, Math.max(clock, Math.min(limit, idleNext))); }
+  else clock = end;
   if (clock - lastReport >= 3600_000) { lastReport = clock; console.log(`${stamp()} world time · ${w.seq} events · ${w.blocks.size} blocks · tokens ${bodies.reduce((s, b) => s + b.tokens, 0).toFixed(0)}`); }
 }
+await Promise.all([...inflight.values()].map(f => f.p));
 const count = (t: string) => (w.db.prepare('SELECT count(*) n FROM events WHERE type=?').get(t) as any).n;
 console.log(`simulated ${hours}h with ${bodies.length} agents: ${w.seq} events, ${w.blocks.size} blocks, ${count('craft')} tools crafted, ${count('make')} artifacts, ${count('die')} deaths, ${count('tame')} tamed, ${bodies.reduce((s, b) => s + b.tokens, 0).toFixed(0)} tokens → ${out} (log: ${logFile})`);

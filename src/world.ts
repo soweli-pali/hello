@@ -307,11 +307,11 @@ export class World {
   vigOf(a: Agent, t = this.now()) { return Math.min(this.cfg.vigorMax, a.vig + (t - a.vigT) / 1000 / this.cfg.vigorSec); }
   terrain(x: number, y: number) { return this.geo.depositAt(x, y); }
   depositAt(x: number, y: number, t = this.now()) {
-    const { m, cap } = this.geo.depositAt(x, y);
-    if (!m) return { m, cap, amt: 0 };
+    const { m, cap, rich } = this.geo.depositAt(x, y);
+    if (!m) return { m, cap, amt: 0, rich };
     const tk = this.taken.get(key(x, y));
     const amt = tk ? Math.min(cap, tk.amt + Math.floor((t - tk.t) / 1000 / (this.cfg.regenSec * REGROW[m]))) : cap;
-    return { m, cap, amt };
+    return { m, cap, amt, rich };
   }
   posOf(it: Item): [number, number] | null {
     const l = it.loc;
@@ -449,7 +449,7 @@ export class World {
     const r = this.sight(a); let best: [number, number] | null = null, bd = Infinity;
     for (let y = a.y - r; y <= a.y + r; y++) for (let x = a.x - r; x <= a.x + r; x++) {
       if (x === a.x && y === a.y) continue; const d = this.depositAt(x, y);
-      if (!d.m || d.amt <= 0 || (m && d.m !== m)) continue; const dd = this.dist(a.x, a.y, x, y); if (dd < bd) { bd = dd; best = [x, y]; }
+      if (!d.m || d.amt <= 0 || (m && d.m !== m)) continue; const dd = this.dist(a.x, a.y, x, y) + (d.rich ? 0 : 0.5); if (dd < bd) { bd = dd; best = [x, y]; }
     }
     return best ? ` The nearest ${m ?? 'deposit'} you can see is ${rel(a, best[0], best[1])}.` : m ? ` You can't see any ${m} from here.` : '';
   }
@@ -836,6 +836,7 @@ export const VERBS: Record<string, Verb> = {
 export function rulesText(cfg: Config) {
   return [
     `- The land is ${cfg.w}x${cfg.h} tiles of forests, meadows, marshes, deserts, tundra, mountain ranges, rivers and sea. Travel is slow and some places are dangerous.`,
+    `- Land yields a little of what it is (forest: wood, mountain: stone, desert: sand, marsh: clay, meadow: fiber); richer deposits of each, and of rarer things, lie in particular places. Gathering takes from the tile you stand on, and it regrows slowly.`,
     `- Actions cost action points (max ${cfg.apMax}, +1 every ${cfg.apSec}s). Thinking, looking and writing notes are free.`,
     `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Deserts drain it without a waterskin, cold without a cloak, water without a boat; wolves bite at night${cfg.harm ? '; other agents can strike you' : ''}.`,
     cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
@@ -907,6 +908,13 @@ export function observe(w: World, a: Agent, detail = 1): string {
     if (x === a.x && y === a.y) continue;
     const its = w.itemsAt({ t: [x, y] }); if (its.length) nearItems.push(`${rel(a, x, y)}: ${detail >= 1 ? fmtItems(its) : its.length + ' item(s)'}`);
   }
+  // the nearest deposit of each kind in sight, in plain words (easier than reading letters off the map)
+  const nearest = new Map<string, [number, number, number]>();
+  for (let y = a.y - r; y <= a.y + r; y++) for (let x = a.x - r; x <= a.x + r; x++) {
+    const d = w.depositAt(x, y); if (!d.m || !d.rich || d.amt <= 0) continue;
+    const dd = w.dist(a.x, a.y, x, y), cur = nearest.get(d.m); if (!cur || dd < cur[2]) nearest.set(d.m, [x, y, dd]);
+  }
+  if (nearest.size) out.push(`Deposits in sight: ${[...nearest].sort((p, q) => p[1][2] - q[1][2]).map(([m, [x, y]]) => `${m === 'food' ? 'food (berries)' : m} ${rel(a, x, y)}`).join('; ')}.`);
   if (nearItems.length) out.push(`Items in sight: ${nearItems.slice(0, detail >= 2 ? 50 : 10).join('; ')}.`);
   if (detail >= 1) {
     const legend = new Map<string, string>(); let digit = 1;
@@ -921,7 +929,7 @@ export function observe(w: World, a: Agent, detail = 1): string {
         const be = beasts.find(({ p }) => p[0] === x && p[1] === y); if (be) { row += SPECIES[be.an.sp].map; continue; }
         const b = w.blocks.get(key(x, y)); if (b) { row += b.kind === 'road' ? '=' : '#'; continue; }
         if (w.itemsAt({ t: [x, y] }).length || fmtMats(w.ground.get(key(x, y)) ?? {})) { row += '*'; continue; }
-        const d = w.depositAt(x, y); row += d.m && d.amt > 0 ? LETTER[d.m] : BIOME_INFO[w.geo.biomeAt(x, y)].map;
+        const d = w.depositAt(x, y); row += d.m && d.rich && d.amt > 0 ? LETTER[d.m] : BIOME_INFO[w.geo.biomeAt(x, y)].map;
       }
       rows.push(row);
     }

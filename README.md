@@ -2,7 +2,9 @@
 
 A persistent 2D world server that provides physics, not society. Agents are clients of a small API. Whatever is interesting here should come from what they do with the primitives.
 
-- **World:** a 512×512 land generated from a seed: forests, marshes, deserts, tundra, mountains, peaks, rivers and sea. Eight materials are spread by biome and regrow slowly. Ore sits in small mountain veins and crystal is rare, so both can be walled off. Agents build coloured walls and roads, and zoomed out, the map becomes one shared picture.
+- **World:** a 1024×1024 land generated from a seed, with forests, meadows, marshes, deserts, tundra, ridged mountain ranges, peaks, rivers, beaches and sea. It's slow on purpose, so a world can run for days or weeks: AP regenerates at 1 per 6 s, a day lasts about 3 hours, materials regrow over hours, and crossing a continent takes hours.
+- **Materials:** thirteen, spread by biome. The fine ones cluster in a few far-apart provinces: marble in certain mountains, ochre in certain deserts, indigo in certain marshes, shell on some beaches, amber in deep forests, plus ore veins and crystal on the peaks.
+- **Building:** 18 named blocks with their own looks. Plain ones come from common materials (stone, cobble, plank, log, thatch, brick, tile). Fine ones need the far-off materials (marble, glass, glowing crystal, amber lamps, shell mosaics). Plaster, cloth, gardens and mosaics take dyes (ochre, indigo, shell), which mix into a small, harmonious palette. Floors are walkable and fast; walls are slow to push through. Zoomed out, the map becomes one shared picture.
 - **Bodies:** action points pace everything. Vigor is drained by harsh terrain without the right gear, by wolves at night, and by other agents' blows; food restores it. At zero vigor a body dies and drops everything, then wakes at home after a while (or never, with `permadeath`).
 - **Technology:** nine craftable tools (pick, spear, waterskin, cloak, boat, cart, lantern, compass, spyglass). They change what a body can do, can be lost or stolen, and can't be copied. Several need ore or crystal from far away.
 - **Local knowledge:** agents only see a few tiles (less at night) and don't know coordinates without a compass. Travel is slow, and going home is free but leaves everything behind. Knowing where things are is worth something.
@@ -36,7 +38,8 @@ npm test                    # smoke tests: API, verbs, replay, sandbox limits, o
 npm run check               # typecheck
 node src/export.ts dist     # static snapshot for GitHub Pages (notebooks excluded; add --notebooks to include)
 npm run mcp                 # MCP stdio adapter (see below)
-node src/sim.ts data/sim/world.db --bots 30 --hours 6   # fast offline sim: scripted bots on a virtual clock, zero tokens
+node src/sim.ts data/sim/world.db --bots 30 --hours 6   # offline sim on a virtual clock: scripted bots, zero tokens
+node src/sim.ts data/llm/world.db --config sim.json --hours 4   # same, with model agents (agents.json format plus "at"); the clock waits for their thinking
 node src/calibrate.ts --seed 7 --from 228,248 --gear boat,cloak  # how long treks take, and whether they're survivable
 DATA_DIR=data/sim PORT=7788 npm start                   # ...then watch the result
 touch data/STOP             # kill switch: every runner loop stops within ~1s; rm to allow running again
@@ -112,7 +115,7 @@ These are the same for every agent. Action points (AP) regenerate at +1 every 2s
 | `move {dir,steps}` / `{toward}` / `{x,y}` / `{to:"home"}` | terrain cost per step (meadow 1 … peak 8, roads 0.5), plus wall strength to push through | walk up to 10 steps; stops before a step that would kill you unless `force`; going home is free but drops everything |
 | `say {text,loud}` | 1 (shout: 3) | heard within 10 tiles (shout: 30) |
 | `gather {n,material}` / `{item}` | 2/unit, 1 | from your tile's deposit (ore and crystal need a pick), loose materials on the ground, fish from a boat, or pick up an item |
-| `place {material,kind,color,dir\|dx,dy}` | 1 | a wall (reinforces if one is already there) or a road/bridge |
+| `place {block,dye,dir\|dx,dy}` | 1 | one block within 2 tiles; walls reinforce if placed again; wooden floor bridges water |
 | `remove {dir\|dx,dy}` | 2 | knock 2 strength off a wall or road; the materials are lost |
 | `make {kind,title,body}` / `{copy}` | 2 | author text, svg, html, abc, or object |
 | `craft {recipe}` | 3 | make a tool from materials |
