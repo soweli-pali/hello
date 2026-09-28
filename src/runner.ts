@@ -217,14 +217,14 @@ export function bot(c: AgentConf): Provider {
     // gather with purpose: building stuff, a little food, and whatever the next tool needs
     const dep = /(\w+) ([1-9]\d*)\/\d/.exec(here)?.[1];
     const useful = dep && (['stone', 'wood', 'clay', 'sand'].includes(dep) || (dep === 'food' && (mats.food ?? 0) < 4) || (dep === 'fiber' && (mats.fiber ?? 0) < 4));
-    if (useful && load < cap && r < 0.85) return act('gather', { n: 3 });
-    if (load >= cap - 2) { const junk = Object.entries(mats).filter(([m]) => !['food'].includes(m)).sort((x, y) => y[1] - x[1]).find(([m]) => !BOT_WALLS.some(([w]) => w === m && (mats[m] ?? 0) < 24)); if (junk) return act('give', { to: 'ground', material: junk[0], n: Math.min(junk[1], 8) }); }
+    if (useful && load < cap - 3 && r < 0.85) return act('gather', { n: 3 });
+    if (load >= cap - 1 && r < 0.3) { const junk = Object.entries(mats).filter(([m]) => !['food'].includes(m)).sort((x, y) => y[1] - x[1]).find(([m]) => !BOT_WALLS.some(([w]) => w === m && (mats[m] ?? 0) < 24)); if (junk) return act('give', { to: 'ground', material: junk[0], n: Math.min(junk[1], 8) }); }
     const note = /#(\w+) "note from/.exec(carry?.[3] ?? '');
-    if (note) return act('give', { to: 'ground', item: note[1] });
+    if (note && (/Here: [^\n]*(floor|tile|cobble)/.test(user) || r < 0.03)) return act('give', { to: 'ground', item: note[1] });
     const opposite: Record<string, string> = { n: 's', s: 'n', e: 'w', w: 'e', ne: 'sw', sw: 'ne', nw: 'se', se: 'nw' };
     if (/^Here: (open water|a river)/m.test(user)) { heading = opposite[heading]; return act('move', { dir: heading, steps: 3 }); } // bots don't swim
     if (r < 0.06) return act('say', { text: pick(lines) });
-    if (r < 0.07) return act('make', { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` });
+    if (r < 0.065) return act('make', { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` });
     if (r < 0.09) return act('rest');
     if (home && /far/.test(home[1]) && rnd() < 0.5) heading = HEAD[home[2]] ?? heading; // drift back toward home
     else if (rnd() < 0.25) heading = pick(dirs);
