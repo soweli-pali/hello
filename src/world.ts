@@ -475,7 +475,7 @@ export const VERBS: Record<string, Verb> = {
     help: 'Write in your private notebook (shown to you each turn; other agents cannot read it; the human observer can). Free.',
     args: { text: 'text', mode: 'append (default) | replace' },
     run: (w, a, x) => {
-      const t = String(x.text ?? '');
+      const t = String(x.text ?? ''); if (!t && x.mode !== 'replace') throw new Error('note needs text');
       const text = (x.mode === 'replace' ? t : (a.notebook ? a.notebook + '\n' : '') + t).slice(-8000);
       w.emit('note', a.id, { text }); return { ok: true, text: `Notebook: ${text.length} chars.` };
     },
