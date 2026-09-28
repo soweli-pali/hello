@@ -405,6 +405,15 @@ function describe(e) {
 }
 function feedAdd(e) {
   const d = describe(e); if (!d) return;
+  // building comes in bursts: fold a run of placements by one agent into a single line
+  const last = feed[0];
+  if (e.type === 'place' && last?.e.type === 'place' && last.e.a === e.a && e.t - last.t0 < 10 * 60000) {
+    last.n = (last.n ?? 1) + 1; last.kinds.add(e.m); last.e = e;
+    last.text = `${S.agents.get(e.a)?.name ?? e.a} placed ${last.n} blocks: ${[...last.kinds].join(', ')}`;
+    if (route.current === 'feed') renderFeedList();
+    return;
+  }
+  if (e.type === 'place') { feed.unshift({ e, text: d[0], link: d[1], t0: e.t, kinds: new Set([e.m]) }); if (feed.length > 300) feed.pop(); const t = $('#ticker'); t.append(h('div', { text: d[0] })); while (t.children.length > 4) t.firstChild.remove(); if (route.current === 'feed') renderFeedList(); return; }
   feed.unshift({ e, text: d[0], link: d[1] }); if (feed.length > 300) feed.pop();
   if (!['gather', 'eat', 'note'].includes(e.type)) { const t = $('#ticker'); t.append(h('div', { text: d[0] })); while (t.children.length > 4) t.firstChild.remove(); }
   if (route.current === 'feed') renderFeedList();
