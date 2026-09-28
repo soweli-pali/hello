@@ -20,7 +20,7 @@ const w = new World(join(process.env.DATA_DIR ?? join(ROOT, 'data'), 'world.db')
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
 const put = (p: string, v: unknown) => { const f = join(out, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, typeof v === 'string' ? v : JSON.stringify(v)); };
 
-for (const f of ['app.js', 'style.css']) copyFileSync(join(ROOT, 'viewer', f), join(out, f));
+for (const f of ['app.js', 'tiles.js', 'style.css']) copyFileSync(join(ROOT, 'viewer', f), join(out, f));
 put('static.js', 'window.HELLO_STATIC = true;');
 put('index.html', readFileSync(join(ROOT, 'viewer', 'index.html'), 'utf8').replace('<script src="app.js">', '<script src="static.js"></script><script src="app.js">'));
 put('data/world.json', worldSnapshot(w));

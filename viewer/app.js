@@ -21,9 +21,11 @@ const h = (tag, attrs = {}, ...kids) => {
 };
 const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000 | 0); return s < 60 ? `${s}s` : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d`; };
 const hueOf = s => { let x = 0; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) | 0; return Math.abs(x) % 360; };
-const STR = { stone: 4, wood: 3, clay: 2, sand: 1, ore: 8, crystal: 3 };
-const MATCOL = { stone: [150, 152, 158], wood: [52, 104, 44], clay: [184, 104, 70], sand: [226, 206, 136], fiber: [168, 196, 104], food: [200, 72, 112], ore: [132, 92, 176], crystal: [120, 236, 244] };
-const BIOCOL = { sea: [18, 42, 68], river: [52, 106, 138], meadow: [78, 104, 60], forest: [36, 68, 42], marsh: [62, 80, 66], desert: [184, 156, 102], tundra: [146, 164, 160], mountain: [112, 104, 96], peak: [226, 232, 238] };
+const STR = new Proxy({}, { get: () => 1 }); // strength is only cosmetic client-side
+const FLOORS = new Set(['cobble', 'floor', 'tile', 'cloth', 'garden', 'mosaic']);
+const kindOf = e => e.kind ?? (FLOORS.has(e.m) ? 'road' : 'wall');
+const MATCOL = { stone: [150, 152, 158], wood: [52, 104, 44], clay: [184, 104, 70], sand: [226, 206, 136], fiber: [168, 196, 104], food: [200, 72, 112], ore: [132, 92, 176], crystal: [120, 236, 244], marble: [238, 235, 228], ochre: [181, 83, 47], indigo: [47, 64, 140], shell: [242, 222, 214], amber: [234, 165, 60] };
+const BIOCOL = { sea: [18, 42, 68], river: [52, 106, 138], meadow: [78, 104, 60], forest: [36, 68, 42], marsh: [62, 80, 66], desert: [184, 156, 102], tundra: [146, 164, 160], mountain: [112, 104, 96], peak: [226, 232, 238], beach: [214, 198, 152] };
 const BEAST = { deer: '#c89a62', goat: '#eeeae0', wolf: '#565b63' };
 
 // ---------------- state ----------------
@@ -41,6 +43,7 @@ async function boot() {
   for (const [x, y] of snap.piles ?? []) S.piles.add(`${x},${y}`);
   for (const [x, y, n] of snap.tileItems) S.tileItems.set(`${x},${y}`, n);
   buildTerrain(ter.data, ter.elev); rebuildBlocks(); buildClouds();
+  if (typeof TileArt !== 'undefined') TileArt.init({ W, H, bytes: S.bytes, elev: S.elev, biomes: S.biomes, materials: S.materials, colors: { biome: BIOCOL } });
   $('#loading')?.classList.add('gone');
   const saved = JSON.parse(localStorage.getItem('hello.view') || 'null');
   if (saved) Object.assign(view, saved); else fit();
@@ -75,7 +78,7 @@ function buildTerrain(b64, elev64) {
       // hillshade, lit from the north-west
       if (b !== 'river') { const sh = Math.max(0.55, Math.min(1.4, 1 + (E(x - 1, y - 1) - E(x + 1, y + 1)) * (b === 'peak' || b === 'mountain' ? 0.035 : 0.05))); c = c.map(v => v * sh); }
     }
-    if (m) { const mat = S.materials[m - 1], mc = MATCOL[mat], a = mat === 'crystal' || mat === 'ore' ? 0.85 : 0.2; c = c.map((v, k) => v * (1 - a) + mc[k] * a); }
+    if (m) { const mat = S.materials[m - 1], mc = MATCOL[mat], a = mat === 'crystal' || mat === 'ore' ? 0.85 : ['marble', 'ochre', 'indigo', 'amber', 'shell'].includes(mat) ? 0.55 : 0.16; c = c.map((v, k) => v * (1 - a) + mc[k] * a); }
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   tc.putImageData(img, 0, 0);
@@ -158,22 +161,36 @@ function draw() {
   cx.drawImage(terrain, ox, oy, W * z, H * z);
   cx.drawImage(blockLayer, ox, oy, W * z, H * z);
   const [x0, y0] = toWorld(0, 0).map(Math.floor), [x1, y1] = toWorld(innerWidth, innerHeight).map(Math.ceil);
-  if (z >= 10) { // grid, block relief, items
-    cx.strokeStyle = '#ffffff0c'; cx.lineWidth = 1; cx.beginPath();
-    for (let x = Math.max(0, x0); x <= Math.min(W, x1); x++) { const [sx] = toScreen(x, 0); cx.moveTo(sx, oy); cx.lineTo(sx, oy + H * z); }
-    for (let y = Math.max(0, y0); y <= Math.min(H, y1); y++) { const [, sy] = toScreen(0, y); cx.moveTo(ox, sy); cx.lineTo(ox + W * z, sy); }
-    cx.stroke();
+  // Up close the land becomes drawn tiles; fade them in over the smooth overview as you zoom.
+  const tileA = Math.max(0, Math.min(1, (z - 5) / 3));
+  if (tileA > 0 && typeof TileArt !== 'undefined') {
+    const C = TileArt.CH, list = [];
+    for (let cy2 = Math.max(0, Math.floor(y0 / C)); cy2 <= Math.min(Math.floor((H - 1) / C), Math.floor(y1 / C)); cy2++)
+      for (let cx2 = Math.max(0, Math.floor(x0 / C)); cx2 <= Math.min(Math.floor((W - 1) / C), Math.floor(x1 / C)); cx2++) list.push([cx2, cy2]);
+    if (!TileArt.ensure(list)) dirty = true;
+    cx.globalAlpha = tileA; cx.imageSmoothingEnabled = z < TileArt.PX;
+    for (const [cx2, cy2] of list) { const c = TileArt.chunk(cx2, cy2); if (!c) continue; const [sx, sy] = toScreen(cx2 * C, cy2 * C); cx.drawImage(c, Math.floor(sx), Math.floor(sy), Math.ceil(C * z) + 1, Math.ceil(C * z) + 1); }
+    cx.imageSmoothingEnabled = false;
+    // blocks, drawn as what they are; walls cast a short shadow to the south
     for (const [k, b] of S.blocks) {
       const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
       const [sx, sy] = toScreen(x, y);
-      if (b.kind === 'road') { cx.fillStyle = '#00000030'; cx.fillRect(sx, sy, z, z * 0.12); continue; }
-      cx.fillStyle = '#0000002a'; cx.fillRect(sx, sy + z * 0.82, z, z * 0.18);
-      cx.fillStyle = '#ffffff22'; cx.fillRect(sx, sy, z, Math.max(1, z * 0.08 * Math.min(b.s, 8)));
+      cx.drawImage(TileArt.block(b.m, b.color, b.kind !== 'road'), sx, sy, Math.ceil(z), Math.ceil(z));
+      // a wall has a face: where nothing tall stands south of it, draw its darker front and the shadow it throws
+      if (b.kind !== 'road' && S.blocks.get(`${x},${y + 1}`)?.kind !== 'wall') {
+        const fh = z * 0.3; cx.globalAlpha = tileA * 0.55; cx.drawImage(TileArt.block(b.m, b.color, false), sx, sy + z, Math.ceil(z), fh);
+        cx.fillStyle = `rgba(0,0,0,${0.35 * tileA})`; cx.fillRect(sx, sy + z, Math.ceil(z), fh); cx.fillStyle = `rgba(0,0,0,${0.18 * tileA})`; cx.fillRect(sx, sy + z + fh, Math.ceil(z), fh * 0.6);
+        cx.globalAlpha = tileA;
+      }
     }
+    cx.globalAlpha = 1;
+  }
+  if (z >= 10) { // items
     for (const [k, n] of S.tileItems) {
       if (!n) continue; const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-      const [sx, sy] = toScreen(x + 0.5, y + 0.5), r = z * 0.2;
-      cx.fillStyle = '#f0c46a'; cx.beginPath(); cx.moveTo(sx, sy - r); cx.lineTo(sx + r, sy); cx.lineTo(sx, sy + r); cx.lineTo(sx - r, sy); cx.fill();
+      const [sx, sy] = toScreen(x + 0.5, y + 0.55), r = z * 0.16;
+      cx.fillStyle = 'rgba(0,0,0,.25)'; cx.fillRect(sx - r + 1, sy - r * 0.7 + 1.5, 2 * r, 1.4 * r);
+      cx.fillStyle = '#efe4c8'; cx.fillRect(sx - r, sy - r * 0.7, 2 * r, 1.4 * r); cx.fillStyle = '#c9b48a'; cx.fillRect(sx - r * 0.6, sy - r * 0.25, r * 1.2, Math.max(1, r * 0.12)); cx.fillRect(sx - r * 0.6, sy + r * 0.15, r * 0.9, Math.max(1, r * 0.12));
     }
   } else if (z >= 3) {
     cx.fillStyle = '#f0c46a';
@@ -181,7 +198,7 @@ function draw() {
   }
   if (z >= 6) for (const k of S.piles) {
     const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-    const [sx, sy] = toScreen(x + 0.3, y + 0.62); cx.fillStyle = '#b08a5a'; cx.beginPath(); cx.arc(sx, sy, z * 0.13, 0, 7); cx.arc(sx + z * 0.22, sy + z * 0.05, z * 0.1, 0, 7); cx.fill();
+    const [sx, sy] = toScreen(x + 0.72, y + 0.72); cx.fillStyle = '#8a6a44'; cx.beginPath(); cx.arc(sx, sy, z * 0.11, 0, 7); cx.fill(); cx.fillStyle = '#a8845a'; cx.beginPath(); cx.arc(sx - z * 0.03, sy - z * 0.04, z * 0.06, 0, 7); cx.fill();
   }
   if (z >= 1.5 && S.cfg.safeRadius > 0) { // safe ground, if this world has any
     const r = S.cfg.safeRadius, [sx, sy] = toScreen(S.spawn[0] - r, S.spawn[1] - r);
@@ -199,8 +216,15 @@ function draw() {
   const dark = darkness();
   if (dark > 0) {
     cx.fillStyle = `rgba(8, 12, 32, ${dark})`; cx.fillRect(0, 0, innerWidth, innerHeight);
-    // bodies carry a little warmth into the dark
+    // bodies carry a little warmth into the dark, and crystal and amber give light
     cx.globalCompositeOperation = 'lighter';
+    for (const [k, b] of S.blocks) {
+      if (b.m !== 'crystal' && b.m !== 'lamp') continue;
+      const [x, y] = k.split(',').map(Number); if (x < x0 - 4 || x > x1 + 4 || y < y0 - 4 || y > y1 + 4) continue;
+      const [sx, sy] = toScreen(x + 0.5, y + 0.5), r = Math.max(8, z * 3.5), gl = cx.createRadialGradient(sx, sy, 0, sx, sy, r);
+      const c = b.m === 'lamp' ? '255, 190, 100' : '140, 235, 255';
+      gl.addColorStop(0, `rgba(${c}, ${0.5 * dark})`); gl.addColorStop(1, `rgba(${c}, 0)`); cx.fillStyle = gl; cx.fillRect(sx - r, sy - r, 2 * r, 2 * r);
+    }
     for (const a of S.agents.values()) {
       if (a.state === 'left' || a.state === 'dead') continue;
       const [sx, sy] = toScreen(a.dx + 0.5, a.dy + 0.5), r = Math.max(10, z * 2.2), gl = cx.createRadialGradient(sx, sy, 0, sx, sy, r);
@@ -321,7 +345,7 @@ function applyEvent(e) {
   switch (e.type) {
     case 'join': S.agents.set(e.a, { id: e.a, name: e.name, x: e.x, y: e.y, dx: e.x, dy: e.y, state: 'active', meta: e.meta, joined: e.t }); break;
     case 'move': a.x = e.x; a.y = e.y; break;
-    case 'place': case 'build': { const k = `${e.x},${e.y}`, b = S.blocks.get(k), st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else S.blocks.set(k, { color: e.color, m: e.m, s: st, kind: e.kind }); if (!S.time) paintBlock(e.x, e.y); break; }
+    case 'place': case 'build': { const k = `${e.x},${e.y}`, b = S.blocks.get(k), st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else S.blocks.set(k, { color: e.color, m: e.m, s: st, kind: kindOf(e) }); if (!S.time) paintBlock(e.x, e.y); break; }
     case 'die': a.state = 'dead'; S.piles.add(`${a.x},${a.y}`); break;
     case 'wake': a.state = 'active'; a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
     case 'home': S.piles.add(`${e.from[0]},${e.from[1]}`); a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
@@ -594,7 +618,7 @@ async function startTime() {
 }
 function timeTo(n) {
   const blocks = new Map();
-  for (let i = 0; i < n; i++) { const e = tEvents[i], k = `${e.x},${e.y}`, b = blocks.get(k); if (e.type !== 'remove') { const st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else blocks.set(k, { color: e.color, s: st, kind: e.kind }); } else if (b) { b.s -= e.dmg; if (b.s <= 0) blocks.delete(k); } }
+  for (let i = 0; i < n; i++) { const e = tEvents[i], k = `${e.x},${e.y}`, b = blocks.get(k); if (e.type !== 'remove') { const st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else blocks.set(k, { color: e.color, m: e.m, s: st, kind: kindOf(e) }); } else if (b) { b.s -= e.dmg; if (b.s <= 0) blocks.delete(k); } }
   rebuildBlocks(blocks);
   const e = tEvents[n - 1]; $('#tlabel').textContent = e ? new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'the beginning';
 }

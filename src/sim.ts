@@ -33,7 +33,7 @@ while (clock < end) {
     const r = await b.think('', `[Now]\n${obs}`, null);
     let rest = false;
     for (const c of r.calls) { const res = w.act(b.a, c.verb, c.args); if ((res.data as any)?.rest) rest = true; }
-    b.next = clock + (rest ? 20_000 : 3000 + Math.random() * 2000);
+    b.next = clock + (rest ? 120_000 : 15_000 + Math.random() * 15_000); // a turn every 15-30s of world time; AP is the real limit
   }
 }
 const count = (t: string) => w.db.prepare('SELECT count(*) n FROM events WHERE type=?').get(t) as any;

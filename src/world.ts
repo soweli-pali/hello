@@ -288,11 +288,11 @@ export class World {
       for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== 3 || hash(x + dx, y + dy, 5) < 0.4) continue;
         if (isWater(this.geo.biomeAt(x + dx, y + dy))) continue;
-        this.emit('build', undefined, { x: x + dx, y: y + dy, m: n % 3 === 0 ? 'marble' : n % 3 === 1 ? 'sandstone' : 'stone' });
+        { const m = n % 3 === 0 ? 'marble' : n % 3 === 1 ? 'sandstone' : 'stone'; this.emit('build', undefined, { x: x + dx, y: y + dy, m, color: blockColor(m) }); }
       }
       for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
         if (hash(x + dx, y + dy, 6) < 0.45 || isWater(this.geo.biomeAt(x + dx, y + dy))) continue;
-        this.emit('build', undefined, { x: x + dx, y: y + dy, m: 'mosaic', dye: (dx + dy) % 2 ? ['indigo', 'shell'] : ['ochre', 'shell'] });
+        { const dye = (dx + dy) % 2 ? ['indigo', 'shell'] : ['ochre', 'shell']; this.emit('build', undefined, { x: x + dx, y: y + dy, m: 'mosaic', dye, color: blockColor('mosaic', dye) }); }
       }
       const lore = LORE[n % LORE.length], tool = RUIN_TOOLS[n % RUIN_TOOLS.length];
       this.emit('make', undefined, { id: `r${n + 1}a`, kind: 'text', title: 'carved words', body: lore, author: 'world', hash: sha(lore), cites: [], loc: { t: [x, y] } });
@@ -457,7 +457,7 @@ export class World {
     const short = Object.entries(needs).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} more ${m}`);
     if (short.length) throw new Error(`A ${type} needs ${short.join(', ')}.`);
     this.need(a, 1);
-    this.emit('place', a.id, { x: tx, y: ty, m: type, dye: dye.length ? dye : undefined, needs, color: blockColor(type, dye), cost: 1 });
+    this.emit('place', a.id, { x: tx, y: ty, m: type, kind: bt.floor ? 'road' : 'wall', dye: dye.length ? dye : undefined, needs, color: blockColor(type, dye), cost: 1 });
     return { ok: true, text: b ? `You reinforced the ${bt.words} ${this.at(a, tx, ty)}.` : `You placed ${bt.words}${dye.length ? ` dyed ${dye.join('+')}` : ''} ${this.at(a, tx, ty)}.` };
   }
 

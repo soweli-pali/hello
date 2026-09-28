@@ -165,42 +165,61 @@ function claudeCli(c: AgentConf): Provider {
 // A zero-cost scripted bot: wanders near home, gathers, eats, crafts simple tools, builds a little, chats a little.
 const BOT_CRAFTS: [string, Record<string, number>][] = [['pick', { wood: 2, stone: 3 }], ['waterskin', { clay: 3, fiber: 2 }], ['spear', { wood: 2, stone: 1 }], ['cloak', { fiber: 8 }]];
 const HEAD: Record<string, string> = { north: 'n', south: 's', east: 'e', west: 'w', 'north-east': 'ne', 'north-west': 'nw', 'south-east': 'se', 'south-west': 'sw' };
+// Walls a bot can make from what it has gathered, and floors to go inside.
+const BOT_WALLS: [string, string, number][] = [['clay', 'brick', 1], ['wood', 'plank', 1], ['stone', 'stone', 1], ['sand', 'sandstone', 2]];
+const BOT_FLOORS: [string, string][] = [['wood', 'floor'], ['clay', 'tile'], ['stone', 'cobble']];
 export function bot(c: AgentConf): Provider {
   let s = (c.seed ?? 1) * 2654435761 >>> 0;
   const rnd = () => ((s = (Math.imul(s ^ (s >>> 15), 2246822507) + 0x9e3779b9) >>> 0) / 4294967296);
   const pick = <T,>(a: T[]) => a[Math.floor(rnd() * a.length)];
-  const hue = Math.floor(rnd() * 360), dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
-  let heading = pick(dirs);
-  const color = (l: number) => { const h = hue / 360, f = (n: number) => { const k = (n + h * 12) % 12, a = 0.6 * Math.min(l, 1 - l); return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); }; return `#${f(0)}${f(8)}${f(4)}`; };
-  const lines = ['hello', 'the light is nice here', 'found some stone', 'building a little wall', 'hm', 'anyone around?', 'this spot is quiet', 'the berries here are good', 'saw a wolf earlier'];
+  const dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+  let heading = pick(dirs), huts = 0;
+  // the bot's own plan, kept here in its harness: a hut ring around where it stands, with a door to the south
+  let plan: { dx: number; dy: number; block: string }[] = [];
+  const lines = ['hello', 'the light is nice here', 'found some stone', 'building a little house', 'hm', 'anyone around?', 'this spot is quiet', 'the berries here are good', 'saw a wolf earlier'];
   return async (_sys, user) => {
     const carry = /Carrying \((\d+)\/(\d+)\): ([^\n]*)/.exec(user), load = +(carry?.[1] ?? 0), cap = +(carry?.[2] ?? 40);
     const mats: Record<string, number> = {}; for (const m of (carry?.[3] ?? '').matchAll(/(\w+) (\d+)/g)) mats[m[1]] = +m[2];
     const tools = new Set([...(carry?.[3] ?? '').matchAll(/"(\w+)" \(tool\)/g)].map(m => m[1]));
     const vig = +(/Vigor ([\d.]+)/.exec(user)?.[1] ?? 10), here = /Here: ([^\n]*)/.exec(user)?.[1] ?? '';
     const home = /Home is (?:at \(\d+,\d+\), )?(a short walk|some way|far|very far) to the ([\w-]+)/.exec(user);
-    const build = ['stone', 'wood', 'clay', 'sand'].filter(m => mats[m] > 0);
-    const r = rnd();
-    if (vig < 4 && mats.food) return { calls: [{ verb: 'eat', args: {} }], text: '', tokens: 0 };
-    if (vig < 2.5) return { calls: [{ verb: 'move', args: { to: 'home' } }], text: '', tokens: 0 };
-    if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.4) return { calls: [{ verb: 'say', args: { text: pick(['hello!', 'hi there', 'hey']) } }], text: '', tokens: 0 };
-    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return { calls: [{ verb: 'craft', args: { recipe: t } }], text: '', tokens: 0 };
-    if (/(stone|wood|clay|sand|fiber|food) [1-9]\d*\/\d/.test(here) && load < cap * 0.8 && r < 0.7) return { calls: [{ verb: 'gather', args: { n: 2 } }], text: '', tokens: 0 };
-    const note = /#(\w+) "note from/.exec(carry?.[3] ?? '');
-    if (note) return { calls: [{ verb: 'give', args: { to: 'ground', item: note[1] } }], text: '', tokens: 0 };
-    const opposite: Record<string, string> = { n: 's', s: 'n', e: 'w', w: 'e', ne: 'sw', sw: 'ne', nw: 'se', se: 'nw' };
-    if (/^Here: (open water|a river)/m.test(user)) { heading = opposite[heading]; return { calls: [{ verb: 'move', args: { dir: heading, steps: 3 } }], text: '', tokens: 0 }; } // bots don't swim
-    let calls: Call[];
-    if (build.length && r < 0.12) calls = [{ verb: 'place', args: { material: pick(build), color: color(0.35 + rnd() * 0.3), dir: heading, kind: rnd() < 0.5 ? 'road' : 'wall' } }];
-    else if (r < 0.2) calls = [{ verb: 'say', args: { text: pick(lines) } }];
-    else if (r < 0.22) calls = [{ verb: 'make', args: { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` } }];
-    else if (r < 0.25) calls = [{ verb: 'rest', args: {} }];
-    else {
-      if (home && /far/.test(home[1]) && rnd() < 0.5) heading = HEAD[home[2]] ?? heading; // drift back toward home
-      else if (rnd() < 0.3) heading = pick(dirs);
-      calls = [{ verb: 'move', args: { dir: heading, steps: 1 + Math.floor(rnd() * 4) } }];
+    const r = rnd(), act = (verb: string, args: any = {}) => ({ calls: [{ verb, args }], text: '', tokens: 0 });
+    if (vig < 4 && mats.food) return act('eat');
+    if (vig < 2.5) { plan = []; return act('move', { to: 'home' }); }
+    if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.3) return act('say', { text: pick(['hello!', 'hi there', 'hey']) });
+    // building: one block per turn until the plan is done or materials run out
+    if (plan.length) {
+      const p = plan.shift()!;
+      return act('place', { block: p.block, dx: p.dx, dy: p.dy });
     }
-    return { calls, text: '', tokens: 0 };
+    const wall = BOT_WALLS.filter(([m, , k]) => (mats[m] ?? 0) >= 15 * k).sort((x, y) => (mats[y[0]] ?? 0) - (mats[x[0]] ?? 0))[0];
+    const floor = wall && BOT_FLOORS.find(([m]) => (mats[m] ?? 0) - (wall[0] === m ? 15 * wall[2] : 0) >= 9);
+    if (wall && huts < 2 && !/^Here: (open water|a river)/m.test(user)) {
+      huts++;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const ring = Math.max(Math.abs(dx), Math.abs(dy));
+        if (ring === 2 && !(dx === 0 && dy === 2)) plan.push({ dx, dy, block: wall[1] });
+        else if (ring < 2 && floor) plan.push({ dx, dy, block: floor[1] });
+      }
+      if (floor) plan.push({ dx: 0, dy: 2, block: floor[1] }); // the doorstep
+      return act('say', { text: pick(['time to build', 'this looks like a good spot for a house', 'building here']) });
+    }
+    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { recipe: t });
+    // gather with purpose: building stuff, a little food, and whatever the next tool needs
+    const dep = /(\w+) ([1-9]\d*)\/\d/.exec(here)?.[1];
+    const useful = dep && (['stone', 'wood', 'clay', 'sand'].includes(dep) || (dep === 'food' && (mats.food ?? 0) < 4) || (dep === 'fiber' && (mats.fiber ?? 0) < 4));
+    if (useful && load < cap && r < 0.85) return act('gather', { n: 3 });
+    if (load >= cap - 2) { const junk = Object.entries(mats).filter(([m]) => !['food'].includes(m)).sort((x, y) => y[1] - x[1]).find(([m]) => !BOT_WALLS.some(([w]) => w === m && (mats[m] ?? 0) < 24)); if (junk) return act('give', { to: 'ground', material: junk[0], n: Math.min(junk[1], 8) }); }
+    const note = /#(\w+) "note from/.exec(carry?.[3] ?? '');
+    if (note) return act('give', { to: 'ground', item: note[1] });
+    const opposite: Record<string, string> = { n: 's', s: 'n', e: 'w', w: 'e', ne: 'sw', sw: 'ne', nw: 'se', se: 'nw' };
+    if (/^Here: (open water|a river)/m.test(user)) { heading = opposite[heading]; return act('move', { dir: heading, steps: 3 }); } // bots don't swim
+    if (r < 0.06) return act('say', { text: pick(lines) });
+    if (r < 0.07) return act('make', { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` });
+    if (r < 0.09) return act('rest');
+    if (home && /far/.test(home[1]) && rnd() < 0.5) heading = HEAD[home[2]] ?? heading; // drift back toward home
+    else if (rnd() < 0.25) heading = pick(dirs);
+    return act('move', { dir: heading, steps: 1 + Math.floor(rnd() * 5) });
   };
 }
 const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot };
