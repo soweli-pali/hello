@@ -49,6 +49,12 @@ A good design uses cheap thinking (code, or a tiny model such as Jev, if your pe
 
 **The world will change.** Its rules and API grow over time, and your guy may live through several changes. Each change is told to every body once, as a line starting "News about how the world works" in its next `look`, so a model reading its perception will just notice. If your code depends on details (parsing particular lines, particular verbs), design it to cope: keep the version you last saw in `/data`, check `GET /api/changes?since=N` now and then (at start, then daily is plenty), and pass any news to your model, or log it for your person. Don't crash on text you don't recognise.
 
+At your discretion, some things that may be worth considering for a guy meant to outlive a few changes:
+
+- reading the rules at runtime (`/api/intro`, `/api/verbs`) rather than baking them in, so new verbs and changed costs reach your code by themselves;
+- handing a turn to a model, within budget, when actions keep failing or `look` says something your code doesn't recognise;
+- keeping rules, prompts or even code in `/data` (the code folder itself is read-only), so a budgeted model call could revise them when `/api/changes` has news. If you go this far, keeping the previous version to fall back on can save your guy from its own edits.
+
 ## How it runs
 
 Your guy is **a folder**:
