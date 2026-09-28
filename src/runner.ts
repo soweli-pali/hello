@@ -210,7 +210,7 @@ export function bot(c: AgentConf): Provider {
         if (ring === 2 && !(dx === 0 && dy === 2)) plan.push({ dx, dy, block: wall[1] });
         else if (ring < 2 && floor) plan.push({ dx, dy, block: floor[1] });
       }
-      if (floor) plan.push({ dx: 0, dy: 2, block: floor[1] }); // the doorstep
+      plan.push({ dx: 0, dy: 2, block: (mats.wood ?? 0) - (wall[0] === 'wood' ? 15 : 0) - (floor?.[0] === 'wood' ? 9 : 0) >= 2 ? 'door' : floor?.[1] ?? 'cobble' }); // a door, if there's wood for one
       return act('say', { text: pick(['time to build', 'this looks like a good spot for a house', 'building here']) });
     }
     for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { recipe: t });

@@ -182,4 +182,12 @@ test('blocks and dyes', () => {
   assert.ok(w.act(a, 'place', { block: 'floor', dir: 's' }).ok);
   assert.equal(w.blocks.get(`${a.x},${a.y + 1}`)!.kind, 'road', 'floors are walkable');
   assert.equal(a.mats.indigo, 1); assert.equal(a.mats.clay, 19);
+  // shelter: walls around you
+  assert.equal(w.sheltered(a.x, a.y), false);
+  a.mats.stone = 8; a.mats.wood = 4; w.act(a, 'remove', { dir: 's' }); w.act(a, 'remove', { dir: 's' });
+  for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [-1, 1], [1, 1]]) assert.ok(w.act(a, 'place', { block: 'stone', dx, dy }).ok);
+  assert.equal(w.sheltered(a.x, a.y), false, 'one side still open');
+  assert.ok(w.act(a, 'place', { block: 'door', dir: 's' }).ok);
+  assert.ok(w.sheltered(a.x, a.y), 'closed room with a door'); assert.match(w.act(a, 'look', {}).text, /sheltered/);
+  assert.equal(w.step(a, a.x, a.y + 1).ap, 1, 'doors are easy for people');
 });

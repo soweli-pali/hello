@@ -11,13 +11,14 @@ import type { Animal } from './fauna.ts';
 export { MATERIALS };
 export type { Material };
 // What can be built. Each block has a fixed look; plaster, cloth and gardens take dyes. The finest need far-off materials.
-export interface BlockType { needs: Partial<Record<Material, number>>; s: number; floor?: boolean; dye?: boolean; glow?: boolean; bridge?: boolean; color: string; words: string }
+export interface BlockType { needs: Partial<Record<Material, number>>; s: number; floor?: boolean; dye?: boolean; glow?: boolean; bridge?: boolean; door?: boolean; color: string; words: string }
 export const BLOCKS: Record<string, BlockType> = {
   stone:     { needs: { stone: 1 }, s: 4, color: '#8e8a82', words: 'rough stone wall' },
   cobble:    { needs: { stone: 1 }, s: 2, floor: true, color: '#77736b', words: 'cobbled road' },
   plank:     { needs: { wood: 1 }, s: 3, color: '#9b6c40', words: 'plank wall' },
   floor:     { needs: { wood: 1 }, s: 1, floor: true, bridge: true, color: '#b3875a', words: 'wooden floor (bridges water)' },
   log:       { needs: { wood: 2 }, s: 6, color: '#6a4a2c', words: 'log wall' },
+  door:      { needs: { wood: 2 }, s: 3, door: true, color: '#7b5330', words: 'wooden door (people pass, animals don\'t)' },
   thatch:    { needs: { fiber: 2 }, s: 1, color: '#c8ab5c', words: 'thatch' },
   brick:     { needs: { clay: 1 }, s: 3, color: '#a9573b', words: 'brick wall' },
   tile:      { needs: { clay: 1 }, s: 1, floor: true, color: '#bb6d4a', words: 'terracotta tile floor' },
@@ -304,7 +305,23 @@ export class World {
 
   // ---------- derived physics ----------
   apOf(a: Agent, t = this.now()) { return Math.min(this.cfg.apMax, a.ap + (t - a.apT) / 1000 / this.cfg.apSec); }
-  vigOf(a: Agent, t = this.now()) { return Math.min(this.cfg.vigorMax, a.vig + (t - a.vigT) / 1000 / this.cfg.vigorSec); }
+  vigOf(a: Agent, t = this.now()) { return Math.min(this.cfg.vigorMax, a.vig + (t - a.vigT) / 1000 / this.cfg.vigorSec * (this.sheltered(a.x, a.y) ? 3 : 1)); }
+  // Inside a closed room (walls and doors all round, up to 100 tiles of floor) is shelter:
+  // wolves can't reach you, and you recover three times as fast.
+  sheltered(x: number, y: number) {
+    if (this.blocks.get(key(x, y))?.kind === 'wall') return false;
+    const seen = new Set([key(x, y)]), todo: [number, number][] = [[x, y]];
+    while (todo.length) {
+      const [cx, cy] = todo.pop()!;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx, ny = cy + dy, k = key(nx, ny);
+        if (seen.has(k) || this.blocks.get(k)?.kind === 'wall') continue;
+        if (!this.geo.inside(nx, ny) || seen.size >= 100) return false;
+        seen.add(k); todo.push([nx, ny]);
+      }
+    }
+    return true;
+  }
   terrain(x: number, y: number) { return this.geo.depositAt(x, y); }
   depositAt(x: number, y: number, t = this.now()) {
     const { m, cap, rich } = this.geo.depositAt(x, y);
@@ -349,6 +366,7 @@ export class World {
   step(a: Agent, x: number, y: number) {
     const b = this.geo.biomeAt(x, y), info = BIOME_INFO[b], blk = this.blocks.get(key(x, y));
     if (blk?.kind === 'road') return { ap: 0.5, dv: 0, b }; // any floor: roads, bridges, paved squares
+    if (blk && BLOCKS[blk.m]?.door) return { ap: 1, dv: 0, b }; // people walk through doors
     const boat = isWater(b) && this.has(a, 'boat');
     const ap = (boat ? 1 : info.cost) + (blk ? blk.s : 0);
     const dv = boat || this.safe(x, y) || (info.guard && this.has(a, info.guard)) ? 0 : info.drain;
@@ -402,7 +420,7 @@ export class World {
   // Wolves bite at night, when you are close, outside the safe ground, without a lantern.
   dangers(a: Agent): string {
     const t = this.now();
-    if (!this.night(t) || this.safe(a.x, a.y) || this.has(a, 'lantern') || t - a.lastBite < 45_000) return '';
+    if (!this.night(t) || this.safe(a.x, a.y) || this.sheltered(a.x, a.y) || this.has(a, 'lantern') || t - a.lastBite < 45_000) return '';
     const wolf = this.animalsNear(a.x, a.y, 1, t).find(({ an }) => SPECIES[an.sp].bites && !an.tamedBy);
     if (!wolf) return '';
     this.emit('hurt', a.id, { cause: 'wolf', animal: wolf.an.id, dv: -SPECIES.wolf.bites! });
@@ -842,6 +860,7 @@ export function rulesText(cfg: Config) {
     cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
       : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at your home (where you first arrived) with nothing, remembering what you remember.`,
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
+    `- Inside a closed room (walls all round; doors let people through but not animals) you are sheltered: wolves can't reach you there, and you recover vigor three times as fast.`,
     `- move {"to":"home"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
     `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
     `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less.`,
@@ -881,7 +900,7 @@ function deadText(w: World, a: Agent) {
 function describeTile(w: World, a: Agent, x: number, y: number) {
   const d = w.depositAt(x, y), b = w.blocks.get(key(x, y)), its = w.itemsAt({ t: [x, y] }), g = fmtMats(w.ground.get(key(x, y)) ?? {});
   const who = [...w.agents.values()].filter(o => o.x === x && o.y === y && o.state !== 'left' && o.state !== 'dead' && o.id !== a.id).map(o => o.name);
-  return [`${x === a.x && y === a.y ? '' : rel(a, x, y) + ': '}${BIOME_INFO[w.geo.biomeAt(x, y)].words}${w.safe(x, y) ? ' (safe ground)' : ''}.`,
+  return [`${x === a.x && y === a.y ? '' : rel(a, x, y) + ': '}${BIOME_INFO[w.geo.biomeAt(x, y)].words}${w.safe(x, y) ? ' (safe ground)' : ''}${w.sheltered(x, y) ? ' (sheltered)' : ''}.`,
     d.m ? `${d.m} ${d.amt}/${d.cap}.` : '',
     g ? `On the ground: ${g}.` : '',
     b ? `${(BLOCKS[b.m]?.words ?? b.m).replace(/^./, c => c.toUpperCase())}${b.dye ? ` dyed ${b.dye.join('+')}` : ''}${b.kind === 'wall' ? `, strength ${b.s}` : ''}, built by ${b.by === 'world' ? 'no one you know' : w.agents.get(b.by)?.name}.` : '',

@@ -138,6 +138,7 @@ const TileArt = (() => {
       case 'plank': for (let j = 0; j < 4; j++) { F(0.72, 0, j * 4 + 3, PX, 1); F(0.85, (j * 5) % 13 + 2, j * 4, 1, 3); } break;
       case 'floor': for (let i = 0; i < 4; i++) { F(0.78, i * 4 + 3, 0, 1, PX); F(0.9, i * 4 + 1, (i * 7) % 12 + 2, 1, 2); } break;
       case 'log': for (let j = 0; j < 3; j++) { F(0.65, 0, j * 5 + 4, PX, 1); F(1.15, 0, j * 5, PX, 1); g.fillStyle = rgb(col, 1.4); g.beginPath(); g.arc(14, j * 5 + 2.3, 1.6, 0, 7); g.fill(); } break;
+      case 'door': F(0.8, 0, 0, PX, PX); F(1, 2, 1, 12, 15); for (let i = 0; i < 3; i++) F(0.78, 5 + i * 3, 1, 1, 15); F(0.6, 2, 5, 12, 1); F(0.6, 2, 11, 12, 1); g.fillStyle = '#e0c070'; g.fillRect(11, 8, 2, 2); break;
       case 'thatch': for (let i = -PX; i < PX; i += 2) { g.strokeStyle = rgb(col, i % 4 ? 0.8 : 1.15); g.beginPath(); g.moveTo(i, PX); g.lineTo(i + PX, 0); g.stroke(); } break;
       case 'brick': for (let j = 0; j < 4; j++) { F(0.62, 0, j * 4 + 3, PX, 1); for (let i = 0; i < 3; i++) F(0.62, ((i * 6 + (j % 2) * 3) % PX), j * 4, 1, 3); F(1.12, 1, j * 4, PX - 2, 1); } break;
       case 'tile': F(0.75, 7, 0, 1, PX); F(0.75, 15, 0, 1, PX); F(0.75, 0, 7, PX, 1); F(0.75, 0, 15, PX, 1); F(1.12, 1, 1, 5, 1); F(1.12, 9, 9, 5, 1); break;
