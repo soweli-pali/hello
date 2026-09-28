@@ -235,11 +235,13 @@ function draw() {
   }
   for (const an of S.animals.values()) {
     if (an.dx < x0 - 1 || an.dx > x1 + 1 || an.dy < y0 - 1 || an.dy > y1 + 1) continue;
-    const [sx, sy] = toScreen(an.dx + 0.5, an.dy + 0.5), r = Math.max(1.2, z * (an.sp === 'wolf' ? 0.3 : 0.24));
+    if (Math.abs(an.x - an.dx) > 0.05) an.face = an.x > an.dx ? 1 : -1; // face the way it walks
+    const [sx, sy] = toScreen(an.dx + 0.5, an.dy + 0.5);
+    if (z >= 8) { Critters.beast(cx, an.sp, sx, sy, z * 1.1, an.face ?? 1, an.tamedBy ? S.agents.get(an.tamedBy)?.name ?? an.tamedBy : null); continue; }
+    const r = Math.max(1.2, z * (an.sp === 'wolf' ? 0.3 : 0.24));
     cx.fillStyle = BEAST[an.sp];
     if (an.sp === 'wolf') { cx.beginPath(); cx.moveTo(sx, sy - r); cx.lineTo(sx + r, sy + r * 0.8); cx.lineTo(sx - r, sy + r * 0.8); cx.fill(); }
     else { cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); }
-    if (z >= 14) { cx.fillStyle = '#0b0e0c'; cx.font = `600 ${Math.round(z * 0.3)}px sans-serif`; cx.textAlign = 'center'; cx.fillText(an.sp[0], sx, sy + z * 0.1); }
   }
   drawClouds(ox, oy, z);
   const dark = darkness();

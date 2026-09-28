@@ -58,7 +58,6 @@ class Raster {
 
 const BIOME: Record<string, string> = { sea: '#122a44', river: '#346a8a', meadow: '#5a7a44', forest: '#2c5434', marsh: '#4e6452', desert: '#c4a46a', tundra: '#98aaa6', mountain: '#7a7068', peak: '#e2e8ee', beach: '#d6c698' };
 const MAT: Record<string, string> = { stone: '#96989e', wood: '#3a6a2c', clay: '#b86846', sand: '#e2ce88', fiber: '#a8c468', food: '#c84870', ore: '#845cb0', crystal: '#78ecf4', marble: '#eeebe4', ochre: '#b5532f', indigo: '#2f408c', shell: '#f2ded6', amber: '#eaa53c' };
-const BEAST: Record<string, string> = { deer: '#c89a62', goat: '#eeeae0', wolf: '#565b63' };
 
 // The picture of what `a` can see right now, centred on it. T pixels per tile.
 export function picture(w: World, a: Agent, T = 24): Buffer {
@@ -82,8 +81,7 @@ export function picture(w: World, a: Agent, T = 24): Buffer {
   for (const [k, b] of w.roofs) { const [x, y] = k.split(',').map(Number); if (!inSight(x, y)) continue; g.fillStyle = hexA(b.color, 0.8); g.fillRect((x - ox) * T, (y - oy) * T, T, T); }
   for (const an of w.fauna.list) {
     if (!w.fauna.alive(an, w.now())) continue; const [x, y] = w.animalPos(an); if (!inSight(x, y)) continue;
-    g.fillStyle = BEAST[an.sp] ?? '#999'; g.beginPath(); g.ellipse((x - ox + 0.5) * T, (y - oy + 0.55) * T, T * 0.3, T * 0.22); g.fill();
-    g.beginPath(); g.ellipse((x - ox + 0.78) * T, (y - oy + 0.38) * T, T * 0.14, T * 0.12); g.fill();
+    Critters.beast(g, an.sp, (x - ox + 0.5) * T, (y - oy + 0.5) * T, T * 0.9, 1, an.tamedBy ? w.agents.get(an.tamedBy)?.name ?? an.tamedBy : null);
   }
   const bodies = [...w.agents.values()].filter(o => (o.state === 'active' || o.state === 'resting') && inSight(o.x, o.y)).sort((p, q) => p.y - q.y);
   for (const o of bodies) Critters.draw(g, { name: o.name, look: (o.meta as any)?.look, worn: w.has(o, 'cloak') ? ['cloak'] : [], state: o.state }, (o.x - ox + 0.5) * T, (o.y - oy + 0.5) * T, T);

@@ -85,6 +85,45 @@ const Critters = (() => {
     else if (ear !== 'bulge') { eye(-1.7, -5.2); eye(1.7, -5.2); }
     if (!shut && S.snout !== 'grin') { P(-3.4, -3.6, 1, 0.6, 'rgba(240,120,120,.45)'); P(2.4, -3.6, 1, 0.6, 'rgba(240,120,120,.45)'); }
   }
-  return { draw, clean, resolve, SPECIES: Object.keys(SPECIES), MARKS };
+  // The world's animals, seen from the side. flip = -1 faces left. tame: a little collar in its person's colour.
+  function beast(g, sp, sx, sy, z, flip = 1, tame = null) {
+    const u = z / 16, f = flip < 0 ? -1 : 1;
+    const P = (x, y, w, h, c) => { g.fillStyle = c; g.fillRect(sx + (f > 0 ? x : -x - w) * u, sy + y * u, w * u, h * u); };
+    const E = (x, y, rx, ry, c) => { g.fillStyle = c; g.beginPath(); g.ellipse(sx + f * x * u, sy + y * u, rx * u, ry * u, 0, 0, 7); g.fill(); };
+    const T = (pts, c) => { g.fillStyle = c; g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(sx + f * x * u, sy + y * u) : g.moveTo(sx + f * x * u, sy + y * u)); g.fill(); };
+    E(0, 6.6, 5.5, 1.3, 'rgba(0,0,0,.28)');
+    if (sp === 'deer') {
+      const c = '#b8824e', d = '#8a5c34';
+      for (const x of [-3.6, -2.2, 2.2, 3.6]) P(x - 0.45, 1.5, 0.9, 5, x < 0 ? d : c);
+      E(-5, -0.8, 1.2, 1, '#f4ece0');                                 // tail
+      E(0, 0.4, 5, 2.8, c); E(0, 1.8, 3.6, 1.1, '#e8d4b4');           // body, belly
+      for (const [x, y] of [[-2, -0.8], [0, -1.4], [1.6, -0.4], [-0.8, 0.6]]) E(x, y, 0.45, 0.4, '#f4ece0');
+      T([[3.2, -0.8], [4.6, -5.5], [6.2, -5], [5.4, 0]], c);          // neck
+      E(6.4, -5.8, 1.9, 1.4, c); E(7.9, -5.4, 0.9, 0.7, '#e8d4b4'); P(8.3, -5.8, 0.6, 0.5, '#1d1714');
+      E(5.2, -7.2, 0.6, 1.3, c); P(6.1, -6.6, 0.7, 0.7, '#1d1714');   // ear, eye
+      P(5.6, -10, 0.5, 3, '#6b4a2e'); P(5.6, -10, 1.8, 0.5, '#6b4a2e'); P(6.9, -11, 0.5, 1.5, '#6b4a2e');
+    } else if (sp === 'goat') {
+      const c = '#eeeae0', d = '#cfc8b8';
+      for (const x of [-3.4, -2, 2, 3.4]) { P(x - 0.5, 1.8, 1, 4.2, x < 0 ? d : c); P(x - 0.5, 5.4, 1, 0.8, '#4a4038'); }
+      E(-4.8, -1, 1, 0.8, c);
+      E(0, 0.5, 4.8, 2.9, c); for (const [x, y] of [[-3, 2.4], [-1, 2.8], [1, 2.8], [3, 2.4]]) E(x, y, 1, 0.7, d); // shaggy
+      E(4.6, -2.8, 2, 2.2, c); E(6.2, -2.2, 1.6, 1.3, c);             // head
+      T([[3.6, -4.2], [2.2, -6.2], [2.6, -6.4], [4.4, -4.6]], '#8a7a62'); T([[4.6, -4.4], [3.6, -6.6], [4, -6.8], [5.4, -4.6]], '#9a8a70'); // horns
+      P(5.2, -3.6, 0.8, 0.7, '#1d1714'); T([[5.6, -1], [6.6, -1], [6.2, 1.2]], d); // eye, beard
+      E(3.2, -3.4, 1.2, 0.5, d);                                      // ear
+    } else if (sp === 'wolf') {
+      const c = '#6f737b', d = '#4f535b', b = '#b8bcc2';
+      T([[-4.2, -0.8], [-8, 1.6], [-7.4, 3], [-4, 1.2]], d); E(-7.4, 2.2, 0.9, 0.9, b);   // tail
+      for (const x of [-3.4, -2, 2.2, 3.6]) P(x - 0.5, 1.4, 1, 5, x < 0 ? d : c);
+      E(0, 0.2, 5, 2.7, c); E(0.4, 1.6, 3.4, 1, b);                   // body, belly
+      T([[2.6, -1.8], [4.2, -4.6], [6.2, -4], [5, 0.4]], c);          // neck ruff
+      E(5.8, -4.2, 2, 1.7, c); T([[6.8, -4.8], [10, -3.6], [9.6, -2.8], [6.8, -3]], c); P(9.6, -3.9, 0.7, 0.6, '#1d1714'); // head, snout, nose
+      T([[4.8, -5.4], [5.2, -8], [6.4, -5.8]], d); T([[6, -5.4], [6.8, -7.8], [7.4, -5.4]], d); // ears
+      P(6.6, -4.9, 0.9, 0.6, '#f0c44a');                              // eye
+      P(7.2, -2.9, 2.2, 0.5, b);
+    } else { E(0, 1, 4, 3, '#999'); }
+    if (tame) { const c = `hsl(${hash(tame) % 360} 70% 55%)`; if (sp === 'goat') P(3.2, -1.2, 2.2, 0.9, c); else P(2.8, -2.2, 2, 0.9, c); }
+  }
+  return { draw, beast, clean, resolve, SPECIES: Object.keys(SPECIES), MARKS };
 })();
 globalThis.Critters = Critters;
