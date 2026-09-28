@@ -1,4 +1,5 @@
 // The runner drives agents as ordinary API clients. The world knows nothing about it.
+import { runHandler, LIMITS, initSandbox } from './sandbox.ts';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,8 @@ const DATA = process.env.DATA_DIR ?? join(ROOT, 'data');
 const STOP_FILE = join(DATA, 'STOP');
 
 export interface AgentConf {
-  name: string; provider: 'anthropic' | 'openai' | 'claude-cli' | 'bot';
+  name: string; provider: 'anthropic' | 'openai' | 'claude-cli' | 'bot' | 'script';
+  file?: string; code?: string; // for provider "script": the script's path, or its code inline
   model?: string; baseUrl?: string; apiKeyEnv?: string; seed?: number;
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
@@ -234,7 +236,22 @@ export function bot(c: AgentConf): Provider {
     return act('move', { dir: heading, steps: 1 + Math.floor(rnd() * 5) });
   };
 }
-export const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot };
+// A scripted body written by anyone: plain JavaScript, run in the QuickJS sandbox (no network, no files, time and
+// memory limits). The script defines turn({ look, memory, name }) and returns { actions: [{verb, args}], memory }.
+// "look" is the same text a model would get; memory is whatever the script returned last time (kept across turns).
+export function script(c: AgentConf): Provider {
+  const code = c.code ?? readFileSync(c.file!, 'utf8'); let memory: unknown = null;
+  return async (_sys, user) => {
+    const look = user.slice(user.lastIndexOf('[Now]\n') + 6).replace(/\n\nWhat would you like to do next, if anything\?$/, '');
+    const r = runHandler(code, 'turn', { look, memory, name: c.name }, { ...LIMITS, ms: 250, gas: 200_000, mem: 16 << 20 });
+    if (!r.ok) throw new Error(`script: ${r.error}`);
+    const v: any = r.value ?? {}; memory = v.memory ?? null;
+    const calls = (Array.isArray(v.actions) ? v.actions : []).slice(0, 5).filter((a: any) => a && typeof a.verb === 'string').map((a: any) => ({ verb: a.verb, args: a.args ?? {} }));
+    return { calls, text: '', tokens: 0 };
+  };
+}
+
+export const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot, script };
 
 // The per-turn prompt: notebook, own summary, recent actions, what the body perceives now.
 export function turnPrompt(notebook: string, m: { summary: string; recent: string[] }, obs: string) {
@@ -269,7 +286,7 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
     creds[c.name] = j; save('runner-creds.json', creds);
   }
   client.token = creds[c.name].token;
-  const provider = PROVIDERS[c.provider](c), isBot = c.provider === 'bot';
+  const provider = PROVIDERS[c.provider](c), isBot = c.provider === 'bot' || c.provider === 'script';
   const base = conf.introFile ? readFileSync(conf.introFile, 'utf8') : intro(rules);
   const tools = toolDefs(verbs), system = base + (c.prompt ? `\n\nA note from the person who runs you:\n${c.prompt}` : '') + '\n\nVerbs:\n' + verbList(verbs);
   const m = mem[c.name] ??= { summary: '', recent: [] as string[], steps: 0, final: false };
@@ -322,6 +339,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (stopped()) { console.error(`Kill switch is on: remove ${STOP_FILE} to run.`); process.exit(1); }
   const verbs = await (await fetch(conf.server + '/api/verbs')).json();
   const rules = ((await (await fetch(conf.server + '/api/rules')).json()) as any).text as string;
+  await initSandbox();
   const creds = load('runner-creds.json', {}), usage = load('runner-usage.json', { __global: 0 }), mem = load('runner-mem.json', {});
   process.on('SIGINT', () => { save('runner-usage.json', usage); save('runner-mem.json', mem); process.exit(0); });
   await Promise.all(conf.agents.map(c => runAgent(conf, c, verbs, rules, creds, usage, mem).catch(e => console.error(c.name, e))));

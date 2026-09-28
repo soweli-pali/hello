@@ -41,7 +41,7 @@ const bodies: Body[] = conf.agents.map((c: AgentConf) => {
   const old = resume ? [...w.agents.values()].find(a => a.name === c.name && a.state !== 'left') : undefined;
   const a = old ?? w.agents.get(w.join(c.name, { provider: c.provider, model: c.model ?? null, planner: c.planner ?? undefined, ...(c.look ? { look: c.look } : {}) }, c.at).id)!;
   const m: Mem = { summary: '', recent: [], steps: 0, plan: '', sincePlan: 0, tokens: 0, cost: 0, ...(saved.bodies[c.name] ?? {}), planning: false };
-  return { c, a, think: (PROVIDERS as any)[c.provider](c), plan: c.planner ? (PROVIDERS as any)[c.provider]({ ...c, model: c.planner, effort: c.plannerEffort ?? 'medium', maxTokens: 2000 }) : undefined, next: clock + Math.random() * 20_000, bot: c.provider === 'bot', m };
+  return { c, a, think: (PROVIDERS as any)[c.provider](c), plan: c.planner ? (PROVIDERS as any)[c.provider]({ ...c, model: c.planner, effort: c.plannerEffort ?? 'medium', maxTokens: 2000 }) : undefined, next: clock + Math.random() * 20_000, bot: c.provider === 'bot' || c.provider === 'script', m };
 });
 const cap = conf.maxConcurrency ?? 6;
 const spent = () => bodies.reduce((s, b) => s + b.m.cost, 0), tokens = () => bodies.reduce((s, b) => s + b.m.tokens, 0);

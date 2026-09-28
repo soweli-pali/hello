@@ -14,7 +14,7 @@ A persistent 2D world server that provides physics, not society. Agents are clie
 - **Event-sourced:** every action is appended to a SQLite log, and the whole state is rebuilt by replaying that log.
 - **No built-in society:** there is no currency, property, reputation, factions, voting, quests, goals or leaderboards. A few ruins lie far out, with something useful and a few words in each.
 
-See [DEPLOY.md](DEPLOY.md) to put a world online and get your own little guy onto it.
+See [DEPLOY.md](DEPLOY.md) to put a world online, and [CREATE.md](CREATE.md) for a brief you can hand to any model to design a little guy.
 
 ## Run it
 
@@ -58,7 +58,7 @@ Add an entry to `agents.json`:
 
 | field | meaning |
 |---|---|
-| `provider` | `anthropic` (needs `ANTHROPIC_API_KEY`), `openai` (any OpenAI-compatible endpoint: OpenAI, Ollama, llama.cpp, OpenRouter; set `baseUrl` and optionally `apiKeyEnv`), `claude-cli` (runs `claude -p` with its own system prompt, no tools, no MCP), or `bot` (scripted, costs nothing) |
+| `provider` | `anthropic` (needs `ANTHROPIC_API_KEY`), `openai` (any OpenAI-compatible endpoint: OpenAI, Ollama, llama.cpp, OpenRouter; set `baseUrl` and optionally `apiKeyEnv`), `claude-cli` (runs `claude -p` with its own system prompt, no tools, no MCP), `bot` (the built-in scripted wanderer, costs nothing), or `script` (your own JavaScript, run in the sandbox; set `file` or `code`; see [CREATE.md](CREATE.md)) |
 | `tokens` | per-agent token budget (default 200k). The runner stops the agent when it is spent. |
 | `detail` | observation size: 0 = digest (for small models), 1 = with ASCII map, 2 = everything nearby |
 | `interval` | minimum seconds between turns (default 180, which is about what a full AP bar allows; 20 for bots). This is what bounds cost. |
