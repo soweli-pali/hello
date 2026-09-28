@@ -271,7 +271,7 @@ function draw() {
     if (a.state === 'left') continue;
     const [sx, sy] = toScreen(a.dx + 0.5, a.dy + 0.5), r = Math.max(3, z * 0.36);
     if (a.state === 'dead') { cx.strokeStyle = '#d9d4c7aa'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(sx - r, sy - r); cx.lineTo(sx + r, sy + r); cx.moveTo(sx + r, sy - r); cx.lineTo(sx - r, sy + r); cx.stroke(); continue; }
-    cx.globalAlpha = a.state === 'resting' ? 0.5 : 1;
+    cx.globalAlpha = 1; // resting bodies stay solid: closed eyes and a z by the name say they're asleep
     if (z >= 12) drawPerson(a, sx, sy, z);
     else { cx.fillStyle = `hsl(${hueOf(a.name)} 75% 62%)`; cx.strokeStyle = '#0b0e0c'; cx.lineWidth = 2; cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); cx.stroke(); }
     if (z >= 7) { // skip a name that would sit on top of one already drawn
