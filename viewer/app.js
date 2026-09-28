@@ -11,7 +11,7 @@ function staticPath(p) {
   if (u.pathname === '/api/items') return 'data/items.json';
   return 'data' + u.pathname.replace(/^\/api/, '') + '.json';
 }
-const raw = id => STATIC ? `data/raw/${id}` : `/api/item/${id}/raw`;
+const raw = (id, kind) => STATIC ? `data/raw/${id}.${{ svg: 'svg', html: 'html' }[kind] ?? 'txt'}` : `/api/item/${id}/raw`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -273,7 +273,7 @@ const itemLink = (id, label) => h('a', { href: `#item/${id}`, text: label ?? '#'
 
 async function showTile(x, y, move) {
   S.sel = { x, y }; dirty = true; if (move && view.z < 10) focus(x, y, 16);
-  const t = await api(`/api/tile?x=${x}&y=${y}`);
+  const t = await api(`/api/tile?x=${x}&y=${y}`).catch(e => { if (!STATIC) throw e; return { deposit: {}, block: null, items: [], agents: [], speech: [] }; });
   const kids = [h('h2', {}, `(${x}, ${y})`)];
   const facts = [];
   if (t.deposit.m) facts.push(`${t.deposit.m} deposit ${t.deposit.amt}/${t.deposit.cap}`);
@@ -324,11 +324,11 @@ async function itemView(id, depth, it) {
     h('div', { class: 'dim small' }, 'by ', by, ` · ${ago(it.t)} ago · `, ...where,
       it.cites?.length ? h('span', {}, ' · cites ', ...it.cites.flatMap(c => [itemLink(c), ' '])) : '',
       it.citedBy?.length ? h('span', {}, ' · cited by ', ...it.citedBy.flatMap(c => [itemLink(c), ' '])) : '',
-      depth === 0 && !STATIC ? h('span', {}, ' · ', h('a', { href: raw(it.id), target: '_blank', rel: 'noopener', text: 'raw' })) : ''));
+      depth === 0 && !STATIC ? h('span', {}, ' · ', h('a', { href: raw(it.id, it.kind), target: '_blank', rel: 'noopener', text: 'raw' })) : ''));
   const box = h('div', { class: depth ? 'embed' : 'art' }, head);
   if (it.kind === 'text') box.append(await textView(it.body, depth));
-  else if (it.kind === 'svg') box.append(h('img', { class: 'svg', src: raw(it.id), alt: it.title }));
-  else if (it.kind === 'html') box.append(h('iframe', { sandbox: 'allow-scripts', src: raw(it.id), loading: 'lazy', referrerpolicy: 'no-referrer', title: it.title }));
+  else if (it.kind === 'svg') box.append(h('img', { class: 'svg', src: raw(it.id, it.kind), alt: it.title }));
+  else if (it.kind === 'html') box.append(h('iframe', { sandbox: 'allow-scripts', src: raw(it.id, it.kind), loading: 'lazy', referrerpolicy: 'no-referrer', title: it.title }));
   else if (it.kind === 'abc') box.append(abcView(it.body));
   else if (it.kind === 'object') {
     box.append(h('pre', { text: it.body }));
@@ -377,7 +377,7 @@ function showAgents() {
 function gallery(items) {
   return h('div', { class: 'gallery' }, ...items.map(i => {
     const thumb = h('div', { class: 'thumb' });
-    if (i.kind === 'svg') thumb.append(h('img', { src: raw(i.id), loading: 'lazy', alt: '' }));
+    if (i.kind === 'svg') thumb.append(h('img', { src: raw(i.id, i.kind), loading: 'lazy', alt: '' }));
     else thumb.textContent = i.excerpt ?? { html: '⧉ page', abc: '♪ music', object: '⚙ object', text: '¶ text' }[i.kind];
     return h('a', { class: 'card', href: `#item/${i.id}` }, thumb, h('div', {}, h('b', { text: i.title })), h('div', { class: 'dim' }, `${i.authorName} · ${ago(i.t)}`), i.cites.length ? h('div', { class: 'dim' }, `↳ ${i.cites.map(c => '#' + c).join(' ')}`) : '');
   }));

@@ -6,7 +6,8 @@
     "start": "node --disable-warning=ExperimentalWarning src/server.ts",
     "run": "node --disable-warning=ExperimentalWarning src/runner.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "mcp": "node --disable-warning=ExperimentalWarning src/mcp.ts"
+    "mcp": "node --disable-warning=ExperimentalWarning src/mcp.ts",
+    "check": "tsc -p ."
   },
   "repository": {
     "type": "git",
@@ -24,5 +25,9 @@
   "type": "module",
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
   }
 }

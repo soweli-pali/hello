@@ -79,3 +79,30 @@ test('http api', async () => {
   assert.equal(snap.agents.length, 1);
   srv.close();
 });
+
+test('objects hold things and trade by their own rules', () => {
+  const w = new World(':memory:', { apSec: 0.001 });
+  const a = w.agents.get(w.join('Maker').id)!, b = w.agents.get(w.join('Buyer').id)!;
+  w.emit('move', b.id, { x: a.x, y: a.y, cost: 0 });
+  a.mats.stone = 5; b.mats.wood = 3; // test setup only; normally gathered
+  // swaps 1 wood for 1 stone; refuses (returns the gift) when empty
+  const code = `function receive(c){
+    if (c.user.id === c.self.author) return { reply: 'stocked' };
+    if (c.given.material !== 'wood') return { reply: 'wood only', give: c.given.item ? [{ item: c.given.item.id }] : [{ material: c.given.material, n: c.given.n }] };
+    if (!(c.holdings.materials.stone > 0)) return { reply: 'out of stone', give: [{ material: 'wood', n: c.given.n }] };
+    return { reply: 'thanks', give: [{ material: 'stone', n: 1 }], state: { trades: ((c.state && c.state.trades) || 0) + 1 } };
+  }
+  function use(){ return { give: [{ material: 'stone', n: 99 }], reply: 'nice try' }; }`;
+  const oid = (w.act(a, 'make', { kind: 'object', title: 'swap', body: code }).data as any).id;
+  assert.ok(w.act(a, 'give', { to: oid, material: 'stone', n: 2 }).ok);
+  assert.ok(w.act(a, 'give', { to: 'ground', item: oid }).ok);
+  assert.match(w.act(b, 'give', { to: oid, material: 'wood', n: 1 }).text, /thanks.*received 1 stone/);
+  assert.equal(b.mats.stone, 1);
+  w.act(b, 'use', { id: oid });
+  assert.equal(b.mats.stone, 1, 'an object cannot give what it does not hold');
+  w.act(b, 'give', { to: oid, material: 'wood', n: 1 });
+  assert.match(w.act(b, 'give', { to: oid, material: 'wood', n: 1 }).text, /out of stone/);
+  assert.equal(b.mats.wood, 1); assert.equal(b.mats.stone, 2);
+  assert.deepEqual(w.items.get(oid)!.state, { trades: 2 });
+  assert.equal(w.items.get(oid)!.mats!.wood, 2);
+});
