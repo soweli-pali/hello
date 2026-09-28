@@ -15,7 +15,7 @@ export interface AgentConf {
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
   at?: [number, number]; // where this body first arrives (its home); default: near the middle
-  effort?: string; plannerEffort?: string; // claude-cli thinking effort (low, medium, high, ...)
+  effort?: string; plannerEffort?: string; thinking?: number; // claude-cli thinking effort (low, medium, high, ...) and/or thinking token budget
   planner?: string; planEvery?: number; // two minds: a slower model plans every few turns, the main model acts on the plan
 }
 interface Conf { server: string; joinKey?: string; globalTokens: number; maxConcurrency: number; introFile?: string; agents: AgentConf[] }
@@ -159,7 +159,7 @@ function claudeCli(c: AgentConf): Provider {
     if (c.model) args.push('--model', c.model);
     if (c.effort) args.push('--effort', c.effort);
     // run from a neutral directory with no session files, so agents never touch any Claude Code project on this machine
-    const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env: cleanEnv(), cwd: agentDir() });
+    const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...cleanEnv(), ...(c.thinking != null ? { MAX_THINKING_TOKENS: String(c.thinking) } : {}) }, cwd: agentDir() });
     let out = '', err = '';
     p.stdout.on('data', d => out += d); p.stderr.on('data', d => err += d);
     p.on('error', reject);

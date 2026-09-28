@@ -25,7 +25,8 @@ rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true 
 const put = (p: string, v: unknown) => { const f = join(out, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, typeof v === 'string' ? v : JSON.stringify(v)); };
 
 for (const f of ['app.js', 'tiles.js', 'style.css']) copyFileSync(join(ROOT, 'viewer', f), join(out, f));
-put('static.js', 'window.HELLO_STATIC = true;');
+const replay = args.includes('--replay'); // open straight into the replay
+put('static.js', `window.HELLO_STATIC = true;${replay ? ' window.HELLO_REPLAY = true;' : ''}`);
 let page = readFileSync(join(ROOT, 'viewer', 'index.html'), 'utf8').replace('<script src="app.js">', '<script src="static.js"></script><script src="app.js">');
 if (artifact) page = page.replace(/<!doctype html>|<\/?html[^>]*>|<\/?head>|<\/?body>|<meta [^>]*>/gi, '').trim();
 put('index.html', page);
@@ -67,7 +68,7 @@ if (args.includes('--single')) {
   const inline = (f: string) => readFileSync(join(out, f), 'utf8').replace(/<\/script/gi, '<\\/script');
   const one = page
     .replace('<link rel="stylesheet" href="style.css">', `<style>${readFileSync(join(out, 'style.css'), 'utf8')}</style>`)
-    .replace('<script src="static.js"></script>', `<script>window.HELLO_STATIC = true; window.HELLO_DATA = ${JSON.stringify(data).replace(/<\//g, '<\\/')};</script>`)
+    .replace('<script src="static.js"></script>', `<script>window.HELLO_STATIC = true;${replay ? ' window.HELLO_REPLAY = true;' : ''} window.HELLO_DATA = ${JSON.stringify(data).replace(/<\//g, '<\\/')};</script>`)
     .replace('<script src="tiles.js"></script>', `<script>${inline('tiles.js')}</script>`)
     .replace('<script src="app.js"></script>', `<script>${inline('app.js')}</script>`);
   writeFileSync(join(out, 'single.html'), one);

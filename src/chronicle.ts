@@ -1,24 +1,33 @@
 // A chronicle of a stretch of the world's history, written by a model from the event log. For the observer.
 //   node src/chronicle.ts [--data data] [--hours 24] [--model sonnet] [--notebooks] > chronicle.md
+//   --agent Name: one body's story (what they did, said, heard and were given; their plans and summaries from sim-log.txt)
+//   --lines: print the condensed log instead of asking a model
 // It condenses events into plain lines, then asks for a short factual account: nothing invented, names and quotes kept.
 import { join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { PROVIDERS } from './runner.ts';
 
 const args = process.argv.slice(2);
 const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i + 1] : undefined; };
-const db = new DatabaseSync(join(opt('data') ?? process.env.DATA_DIR ?? 'data', 'world.db'), { readOnly: true });
+const dataDir = opt('data') ?? process.env.DATA_DIR ?? 'data', only = opt('agent');
+const db = new DatabaseSync(join(dataDir, 'world.db'), { readOnly: true });
 const rows = db.prepare('SELECT * FROM events ORDER BY seq').all() as any[];
 const last = Math.max(...rows.filter(r => r.a).map(r => r.t), 0), from = last - Number(opt('hours') ?? 24) * 3600_000;
 const names = new Map<string, string>(); const start = Math.min(...rows.filter(r => r.t >= from && r.a).map(r => r.t));
 const hhmm = (t: number) => { const m = Math.round((t - start) / 60000); return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
 
-const lines: string[] = []; const burst = new Map<string, { n: number; kinds: Set<string>; t: number; x: number; y: number }>();
+const lines: string[] = []; let onlyId = ''; const pos = new Map<string, [number, number]>();
+const near = (e: any) => { const p = pos.get(onlyId); return p && e.x != null && Math.max(Math.abs(e.x - p[0]), Math.abs(e.y - p[1])) <= 10; };
+const burst = new Map<string, { n: number; kinds: Set<string>; t: number; x: number; y: number }>();
 const flush = (a: string) => { const b = burst.get(a); if (b) { lines.push(`${hhmm(b.t)} ${names.get(a)} built ${b.n} blocks (${[...b.kinds].join(', ')}) near (${b.x},${b.y})`); burst.delete(a); } };
 for (const r of rows) {
   const e = { ...JSON.parse(r.data), type: r.type, a: r.a, t: r.t }; const who = names.get(e.a) ?? e.a;
-  if (e.type === 'join') names.set(e.a, e.name);
+  if (e.type === 'join') { names.set(e.a, e.name); if (e.name === only) onlyId = e.a; }
+  if (e.a && e.x != null && ['move', 'join', 'wake', 'home'].includes(e.type)) pos.set(e.a, [e.x, e.y]);
   if (r.t < from) continue;
+  // one body's story: their own doings, what they heard, and anything done to or for them
+  if (only && e.a !== onlyId && !(e.type === 'say' && near(e)) && e.to?.a !== onlyId && e.target !== onlyId) continue;
   if (e.type !== 'place' && e.a) flush(e.a);
   switch (e.type) {
     case 'join': lines.push(`${hhmm(e.t)} ${e.name} arrived at (${e.x},${e.y})`); break;
@@ -36,10 +45,19 @@ for (const r of rows) {
   }
 }
 for (const a of [...burst.keys()]) flush(a);
+// a two-minded body's plans, and anyone's own summaries, in their words (from the simulation's log)
+if (only && existsSync(join(dataDir, 'sim-log.txt'))) for (const l of readFileSync(join(dataDir, 'sim-log.txt'), 'utf8').split('\n')) {
+  const m = /^\[(\d+):(\d+)\] (\S+) (planned \([^)]*\)|summary): (.*)$/.exec(l); if (!m || m[3] !== only) continue;
+  lines.push(`${m[1]}:${m[2]} (${only}'s own ${m[4].startsWith('planned') ? 'plan' : 'summary'}) ${m[5].replace(/\(\d+s \$[\d.]+\)/, '').slice(0, 700)}`);
+}
+if (only) lines.sort((a, b) => a.slice(0, 5).localeCompare(b.slice(0, 5)));
+if (args.includes('--lines')) { console.log(lines.join('\n')); process.exit(0); }
 if (!lines.length) { console.log('Nothing happened in that stretch.'); process.exit(0); }
-const text = lines.slice(-1500).join('\n');
+const text = lines.slice(only ? -4000 : -1500).join('\n');
 const model = opt('model') ?? 'sonnet';
 const p = PROVIDERS['claude-cli']({ name: 'chronicler', provider: 'claude-cli', model, maxTokens: 4000 });
-const system = 'You write chronicles of a small world from its event log, for the person who watches it. Be strictly factual: use only what the log says, keep names and short quotes, never invent motives, feelings or events. Plain, warm prose. Headings by time of day if helpful. Under 600 words.';
-const r = await p(system, `Here is the log (times are hours:minutes from the start of this stretch):\n\n${text}\n\nWrite the chronicle.`, null);
+const system = only
+  ? `You write the story of one person, ${only}, in a small world, from the event log, for the person who watches it. Be strictly factual: use only what the log says, keep names and short quotes, never invent events. Motives only where ${only}'s own plans or summaries state them. Plain, warm prose with a title. Under 450 words.`
+  : 'You write chronicles of a small world from its event log, for the person who watches it. Be strictly factual: use only what the log says, keep names and short quotes, never invent motives, feelings or events. Plain, warm prose. Headings by time of day if helpful. Under 600 words.';
+const r = await p(system, `Here is the log (times are hours:minutes from the start of this stretch):\n\n${text}\n\nWrite the ${only ? 'story' : 'chronicle'}.`, null);
 console.log(r.text);

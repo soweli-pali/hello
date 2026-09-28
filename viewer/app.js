@@ -272,10 +272,10 @@ function draw() {
     const [sx, sy] = toScreen(a.dx + 0.5, a.dy + 0.5), r = Math.max(3, z * 0.36);
     if (a.state === 'dead') { cx.strokeStyle = '#d9d4c7aa'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(sx - r, sy - r); cx.lineTo(sx + r, sy + r); cx.moveTo(sx + r, sy - r); cx.lineTo(sx - r, sy + r); cx.stroke(); continue; }
     cx.globalAlpha = a.state === 'resting' ? 0.5 : 1;
-    cx.fillStyle = `hsl(${hueOf(a.name)} 75% 62%)`; cx.strokeStyle = '#0b0e0c'; cx.lineWidth = 2;
-    cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); cx.stroke();
+    if (z >= 12) drawPerson(a, sx, sy, z);
+    else { cx.fillStyle = `hsl(${hueOf(a.name)} 75% 62%)`; cx.strokeStyle = '#0b0e0c'; cx.lineWidth = 2; cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); cx.stroke(); }
     if (z >= 7) { // skip a name that would sit on top of one already drawn
-      const ly = sy - r - 5, w2 = cx.measureText(a.name).width / 2 + 3;
+      const ly = z >= 12 ? sy - z * 0.8 - 5 : sy - r - 5, w2 = cx.measureText(a.name).width / 2 + 3;
       if (!labels.some(l => Math.abs(l[0] - sx) < l[2] + w2 && Math.abs(l[1] - ly) < 13)) {
         labels.push([sx, ly, w2]); cx.lineWidth = 3; cx.strokeStyle = '#0b0e0caa'; cx.strokeText(a.name, sx, ly);
         cx.fillStyle = '#eef1ea'; cx.fillText(a.name + (a.state === 'resting' ? ' z' : ''), sx, ly);
@@ -294,6 +294,22 @@ function draw() {
   }
 }
 
+// Up close, a body is a little person: a coat in their own colour, a face, sometimes a hat, hair or a scarf (chosen by name).
+function drawPerson(a, sx, sy, z) {
+  const u = z / 16, hue = hueOf(a.name), v = hueOf(a.name + '*'), P = (x, y, w, h, c) => { cx.fillStyle = c; cx.fillRect(sx + x * u, sy + y * u, w * u, h * u); };
+  cx.fillStyle = 'rgba(0,0,0,.28)'; cx.beginPath(); cx.ellipse(sx, sy + 6.5 * u, 5 * u, 1.8 * u, 0, 0, 7); cx.fill();
+  const coat = `hsl(${hue} 62% 52%)`, dark = `hsl(${hue} 55% 34%)`, skin = ['#f1c9a5', '#d9a57b', '#a8724f', '#7a4f36', '#e8b894'][v % 5];
+  P(-3.5, 6, 2.5, 1.5, '#2a2320'); P(1, 6, 2.5, 1.5, '#2a2320');                 // boots
+  P(-4.5, -1, 9, 7.5, dark); P(-4, -1, 8, 7, coat); P(-0.5, -1, 1, 7, dark);      // coat
+  P(-6, 0, 1.8, 5, coat); P(4.2, 0, 1.8, 5, coat);                               // arms
+  P(-3.5, -8, 7, 7, skin);                                                        // head
+  const hairC = ['#3b2a1e', '#6b4a2b', '#c9a15a', '#1e1a18', '#a24a2a', '#d8d2c4'][(v >> 3) % 6];
+  P(-3.8, -8.8, 7.6, 2.4, hairC); if ((v >> 5) % 2) { P(-3.8, -8, 1.3, 5, hairC); P(2.5, -8, 1.3, 5, hairC); }
+  if ((v >> 7) % 3 === 0) { P(-5, -9.5, 10, 1.4, dark); P(-3, -12.5, 6, 3.2, dark); }  // a hat
+  if ((v >> 9) % 3 === 1) P(-4, -1.6, 8, 1.6, `hsl(${(hue + 150) % 360} 60% 58%)`); // a scarf
+  if (a.state === 'resting') { P(-2.2, -4.6, 1.6, 0.5, '#2a1d18'); P(0.8, -4.6, 1.6, 0.5, '#2a1d18'); }
+  else { P(-2, -5, 1.2, 1.4, '#1d1714'); P(1, -5, 1.2, 1.4, '#1d1714'); }
+}
 function phase(t = worldNow()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
 function darkness() { const p = phase(); return p >= 0.75 ? 0.5 : p > 0.62 ? (p - 0.62) / 0.13 * 0.5 : p < 0.06 ? (0.06 - p) / 0.06 * 0.5 : 0; }
 async function pollAnimals() {
@@ -667,6 +683,7 @@ const RTYPES = new Set(['join', 'move', 'wake', 'home', 'die', 'leave', 'rest', 
 const cloneState = () => ({ agents: new Map([...S.agents].map(([k, a]) => [k, { ...a }])), blocks: new Map([...S.blocks].map(([k, b]) => [k, { ...b }])), roofs: new Map([...S.roofs].map(([k, b]) => [k, { ...b }])), piles: new Set(S.piles) });
 const setState = st => { S.agents = new Map([...st.agents].map(([k, a]) => [k, { ...a }])); S.blocks = new Map([...st.blocks].map(([k, b]) => [k, { ...b }])); S.roofs = new Map([...st.roofs].map(([k, b]) => [k, { ...b }])); S.piles = new Set(st.piles); };
 async function startTime() {
+  while (!S.cfg || !terrain) await new Promise(r => setTimeout(r, 100)); // the world must be loaded first
   if (!R.ev) {
     $('#tlabel').textContent = 'loading…'; $('#timebar').hidden = false;
     const ev = [];
@@ -698,8 +715,10 @@ function seek(t) {
   // words stay on screen for a few minutes of world time
   S.speech = []; for (let k = R.i - 1; k >= 0 && R.ev[k].t > t - 240_000; k--) if (R.ev[k].type === 'say' && !S.speech.some(s => s.a === R.ev[k].a)) S.speech.push({ a: R.ev[k].a, text: R.ev[k].text, until: Infinity });
   if (R.follow) { const a = S.agents.get(R.follow); if (a) { view.x = a.dx + 0.5; view.y = a.dy + 0.5; } }
-  const tk = $('#ticker'), lines = [];
-  for (let k = R.i - 1; k >= 0 && lines.length < 4 && R.ev[k].t > t - 3 * 3600_000; k--) { const e = R.ev[k]; if (['say', 'make', 'craft', 'die', 'tame', 'join', 'leave'].includes(e.type) || (e.type === 'strike' && e.killed)) { const d = describe(e); if (d) lines.unshift(d[0]); } }
+  // the ticker tells what happened lately within sight of the screen
+  const tk = $('#ticker'), lines = [], [vx0, vy0] = toWorld(0, 0), [vx1, vy1] = toWorld(innerWidth, innerHeight);
+  const onScreen = e => { const a = S.agents.get(e.a), x = e.x ?? a?.x, y = e.y ?? a?.y; return x == null || (x >= vx0 - 2 && x <= vx1 + 2 && y >= vy0 - 2 && y <= vy1 + 2); };
+  for (let k = R.i - 1; k >= 0 && lines.length < 4 && R.ev[k].t > t - 3 * 3600_000; k--) { const e = R.ev[k]; if ((['say', 'make', 'craft', 'die', 'tame', 'join', 'leave'].includes(e.type) || (e.type === 'strike' && e.killed)) && onScreen(e)) { const d = describe(e); if (d) lines.unshift(d[0]); } }
   if (tk.dataset.sig !== lines.join('|')) { tk.dataset.sig = lines.join('|'); tk.replaceChildren(...lines.map(l => h('div', { text: l, style: 'animation:none' }))); }
   rebuildBlocks();
   const min = Math.round((t - R.t0) / 60000), p = phase(t), part = p < 0.06 ? 'dawn' : p < 0.3 ? 'morning' : p < 0.5 ? 'midday' : p < 0.62 ? 'afternoon' : p < 0.75 ? 'dusk' : 'night';
@@ -721,6 +740,6 @@ $('#tclose').onclick = () => {
   if (R.live) { setState(R.live); SKEW = R.live.skew; S.animals = R.live.animals; S.speech = []; for (const e of R.pending ?? []) applyEvent(e); R.pending = []; R.ev = null; }
   $('#ticker').replaceChildren(); rebuildBlocks(); stats();
 };
-if (/[?&]replay\b/.test(location.search) || location.hash === '#replay') addEventListener('load', () => setTimeout(startTime, 300));
+if (window.HELLO_REPLAY || /[?&]replay\b/.test(location.search) || location.hash === '#replay') addEventListener('load', () => setTimeout(startTime, 300));
 
 boot();
