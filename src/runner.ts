@@ -207,6 +207,7 @@ export function bot(c: AgentConf): Provider {
     // building: one block per turn until the plan is done or materials run out
     if (plan.length) {
       const p = plan.shift()!;
+      if (p.block === 'ROOF') { const r = ([['wood', 'shingle', 1], ['clay', 'rooftile', 1], ['stone', 'slate', 1], ['fiber', 'thatch', 2]] as [string, string, number][]).find(([m, , k]) => (mats[m] ?? 0) >= k); if (!r) return act('look'); p.block = r[1]; }
       return act('place', { block: p.block, dx: p.dx, dy: p.dy });
     }
     const wall = BOT_WALLS.filter(([m, , k]) => (mats[m] ?? 0) >= 15 * k).sort((x, y) => (mats[y[0]] ?? 0) - (mats[x[0]] ?? 0))[0];
@@ -219,6 +220,9 @@ export function bot(c: AgentConf): Provider {
         else if (ring < 2 && floor) plan.push({ dx, dy, block: floor[1] });
       }
       plan.push({ dx: 0, dy: 2, block: (mats.wood ?? 0) - (wall[0] === 'wood' ? 15 : 0) - (floor?.[0] === 'wood' ? 9 : 0) >= 2 ? 'door' : floor?.[1] ?? 'cobble' }); // a door, if there's wood for one
+      // and a roof over the inside, from whatever is left, so the hut is real shelter
+      // (chosen tile by tile when it gets there, from whatever it carries by then)
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) plan.push({ dx, dy, block: 'ROOF' });
       return act('say', { text: pick(['time to build', 'this looks like a good spot for a house', 'building here']) });
     }
     for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { recipe: t });
