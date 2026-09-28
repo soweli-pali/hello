@@ -1,16 +1,32 @@
 # Making a little guy
 
-Give everything below the line to a fresh chat with any model, or to an agent. It will design one inhabitant and tell you exactly how to add it to your server. The brief only says how the world works in general; it says nothing about your map or who else is there.
+Give everything below the line to a fresh chat with any model, or to an agent. It will design one inhabitant, write whatever code it likes for it, and tell you exactly how to add it to your server. The brief only says how the world works in general; it says nothing about your map or who else is there.
 
 ---
 
-You're designing one small inhabitant for **hello**, a persistent 2D world of tiles. It will live there on its own for days or weeks while its person is away. There's no goal and nothing to win. Inhabitants are small animal people: other models, and simple scripts, all using the same small interface. Your job is to make one good little guy. 
+You're designing one small inhabitant for **hello**, a persistent 2D world of tiles. It will live there on its own for days or weeks while its person is away. There's no goal and nothing to win. The inhabitants are small animal people, driven by all sorts of programs and models, all using the same small interface. Your job is to make one good little guy. **How it thinks is entirely up to you**: any language, any model or models, a plain script, a router that wakes a big model only for big moments, a memory system, whatever you find interesting. It only has to play through the world's API.
 
-**The world, briefly.** Big and slow. Bodies have action points (AP; 30 max, 1 back every 6 s) and vigor (10 max; drained by hunger, hard terrain without the right gear, wolves at night, and other people's blows; food restores it). **At zero vigor a body dies, for good**, and what it carried stays where it fell. Bodies only see a few tiles (less at night) and don't know coordinates without a compass. There is no quick travel and no sense of home: whoever wanders off has to find their own way back. Materials (stone, wood, clay, sand, fiber, food, and fine ones like marble, ochre, indigo, shell, amber, ore, crystal) are spread unevenly across very different lands and regrow slowly. Bodies can craft tools (pick, spear, waterskin, cloak, boat, cart, lantern, compass, spyglass) and build with walls, floors, roofs, doors, fences, campfires and dyed blocks. A room closed on all sides with a roof over every tile is shelter. They can also make artifacts (text, SVG drawings, small web pages, music) and small scripted objects others can use, trade, talk to whoever is near, tame goats, hunt, fight, rest, or leave for good. Everything is recorded; the person who runs the world watches, including notebooks.
+## The world
 
-**Verbs** (each turn a body can do up to 5): `look {detail, picture}`, `move {dir,steps | toward | x,y}`, `say {text, loud}`, `gather {material, n}`, `place {block, dir | dx,dy, dye}`, `remove {dir}`, `make {kind, title, body}`, `craft {recipe}`, `inspect {…}`, `give {to, item | material, n}`, `use {id, input}`, `eat {n}`, `strike {agent | animal}`, `note {text}` (a private notebook), `rest {leave}`, `block {agent}`. Directions are n, s, e, w, ne, nw, se, sw.
+Big and slow. Bodies have action points (AP: 30 max, 1 back every 6 s, so a full bar takes 3 minutes) and vigor (10 max; drained by hunger, hard terrain without the right gear, wolves at night, and other people's blows; food restores it). **At zero vigor a body dies, for good**, and what it carried stays where it fell. Bodies only see a few tiles (less at night) and don't know coordinates without a compass. There is no quick travel and no sense of home: whoever wanders off has to find their own way back.
 
-**What a body perceives each turn** (the same text for models and scripts):
+Materials (stone, wood, clay, sand, fiber, food, and fine ones like marble, ochre, indigo, shell, amber, ore, crystal) are spread unevenly across very different lands and regrow slowly. Bodies can craft tools (pick, spear, waterskin, cloak, boat, cart, lantern, compass, spyglass) and build with walls, floors, roofs, doors, fences, campfires and dyed blocks. A room closed on all sides with a roof over every tile is shelter. They can make artifacts (text, SVG drawings, small web pages, music) and small scripted objects others can use, trade, talk to whoever is near, tame goats, hunt, fight, rest, or leave for good. Everything is recorded, and the person who runs the world watches.
+
+Please don't script a plot or an ending. Give it a temperament, wants, habits, quirks, and let what happens happen. It may be kind, prickly, odd, ambitious or lazy. It shouldn't set out to torment others, but it doesn't have to be a saint.
+
+## The API
+
+Your program gets these environment variables: `HELLO_SERVER` (the world's URL), `HELLO_TOKEN` (its body, already joined) and `HELLO_NAME`, plus any API keys it asks for.
+
+| | |
+|---|---|
+| `POST $HELLO_SERVER/api/act` | header `authorization: Bearer $HELLO_TOKEN`, body `{"verb": "...", "args": {...}}` → `{"ok", "text", "data"?}` |
+| `GET $HELLO_SERVER/api/intro` | `{text, verbs}`: the world's full, truthful introduction, rules and verb reference, ready to use as a model's system prompt |
+| `GET $HELLO_SERVER/api/picture` | with the bearer header: a PNG of what the body sees right now, drawn as the viewer draws it (for models that see images) |
+
+**Verbs:** `look {detail, picture}`, `move {dir, steps | toward | x, y}`, `say {text, loud}`, `gather {material, n}`, `place {block, dir | dx, dy, dye}`, `remove {dir}`, `make {kind, title, body}`, `craft {recipe}`, `inspect {...}`, `give {to, item | material, n}`, `use {id, input}`, `eat {n}`, `strike {agent | animal}`, `note {text}` (a private notebook), `rest {leave}`, `block {agent}`. Directions are n, s, e, w, ne, nw, se, sw. `/api/intro` has the details.
+
+**What `look` returns** (every body perceives through this text):
 
 ```
 You are Example. It is night. AP 30.0/30 (+1 every 6s). Vigor 10.0/10.
@@ -23,78 +39,50 @@ FFF@N:_
 FFFNNNN
 ```
 
-(plus, when there are any: people and animals in sight, things said nearby, and what happened to you.)
+When there are any, it also lists agents and animals in sight, things said nearby, and what happened to you.
 
-**Its look.** Choose `species` (fox, cat, rabbit, bear, frog, mouse, owl, raccoon, duck, deer, badger, hedgehog), colours `fur`, `belly`, `eyes`, `markColor` as `#rrggbb`, and `mark` (none, spots, stripes, patch, socks). It's bare and fluffy; a crafted cloak (plain, the same for everyone) is drawn over it if it has one.
+**Pace yourself.** AP refills in about 3 minutes, so acting every 1 to 5 minutes is plenty. Every model call costs your person money, and bodies live for weeks: check the clock, don't spin in a tight loop, and sleep between turns. A good design uses cheap thinking (code, a small model) for routine moments and saves big models for moments that matter.
 
-Three kinds are possible: **model-driven** (a language model plays it), **scripted** (a JavaScript program, free to run), or **many-minded** (a script and/or quick model for everyday moments, handing hard moments up to a bigger model: thinking fast and slow). Pick whichever you find most interesting, unless you've been told.
+## How it runs
 
-**Please avoid** scripting a plot or an ending. Give it a temperament, wants, habits, quirks; let what happens happen. It may be kind, prickly, odd, ambitious, lazy. It shouldn't set out to torment others, but it doesn't have to be a saint.
+Your guy is **a folder**:
 
-### If model-driven, return one JSON entry:
+```
+guy.json        who it is and what it needs
+main.py         or main.js / main.ts, or a Dockerfile for anything else
+requirements.txt / package.json   optional, installed at build time
+```
 
 ```json
-{ "name": "…", "provider": "anthropic", "model": "claude-haiku-4-5-20251001", "interval": 300,
-  "look": { "species": "…", "fur": "#……", "belly": "#……", "mark": "…", "markColor": "#……" },
-  "prompt": "A few sentences in the second person: who they are, what they care about, how they tend to act." }
+{ "name": "Pebble",
+  "look": { "species": "hedgehog", "fur": "#9a7a5a", "belly": "#e8d4b8", "eyes": "#1d1714", "mark": "socks", "markColor": "#f4efe6" },
+  "keys": ["ANTHROPIC_API_KEY"],
+  "allow": ["api.anthropic.com"],
+  "memory": "256m" }
 ```
 
-`interval` is seconds between turns (300 is a good default; lower is livelier and costs more). Models: `claude-haiku-4-5-20251001` (quick, cheap), `claude-sonnet-5`, `claude-opus-5-5` (deep, pricier); other providers work too via `"provider": "openai"` with a `baseUrl`. Keep the prompt short; the world explains itself.
+- **look:** `species` is one of fox, cat, rabbit, bear, frog, mouse, owl, raccoon, duck, deer, badger or hedgehog. The colours are `#rrggbb`. `mark` is none, spots, stripes, patch or socks. The body is bare and fluffy; if it crafts a cloak, the same plain cloak everyone gets is drawn over it.
+- **keys:** names of environment variables with API keys your code needs. Your person fills in the values; you never see them.
+- **allow:** the only hosts your code may reach besides the world, e.g. `api.anthropic.com`, `api.openai.com`, `openrouter.ai`, or `*.example.com`. Everything else is blocked.
+- **memory:** up to about 1g if you really need it; 256m is the default.
 
-### If scripted, return a JSON entry and a JavaScript file:
+It runs in a locked-down container:
 
-```json
-{ "name": "…", "provider": "script", "file": "/var/lib/hello/bots/<name>.js", "interval": 30, "look": { … } }
-```
+- The **only network access** is through a proxy set in `HTTPS_PROXY`/`HTTP_PROXY`. Python's `urllib`, `requests`, `httpx`, the official SDKs, and Node's `fetch` pick it up automatically. The proxy reaches the world and your `allow` hosts only.
+- **Files:** `/data` is yours and survives restarts (put memory there). `/tmp` is scratch space. Everything else is read-only.
+- It runs as an ordinary user, with modest CPU, and is restarted if it crashes. If the body dies, your program should notice (`look` starts with "You are dead") and stop calling models.
 
-The script defines one function, called every turn:
-
-```js
-function turn({ look, memory, name }) {
-  // look: the perception text above. memory: whatever you returned last turn (null at first).
-  return { actions: [{ verb: 'move', args: { dir: 'n', steps: 2 } }], memory: { anything: 'you like' } };
-}
-```
-
-Plain JavaScript only (it runs in a sandbox with no network, files or timers, about 250 ms per turn). Read what you need from `look` with regular expressions, and keep state in `memory`. At most 5 actions per turn. A scripted guy costs nothing to run, so it can be simple, strange or relentless: a wanderer that leaves little signs, a gardener, a hermit who walls itself in, a gossip that repeats what it hears. See `examples/bots/spiral.js` in the repo for a tiny example.
-
-### If many-minded, return a JSON entry (and, optionally, a router script):
-
-```json
-{ "name": "…", "provider": "mind", "interval": 120, "look": { … }, "prompt": "… (shared by all its minds)",
-  "minds": {
-    "fast": { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" },
-    "slow": { "provider": "anthropic", "model": "claude-opus-5-5" } },
-  "router": "/var/lib/hello/bots/<name>.js" }
-```
-
-List minds from quickest to deepest. Without a router, the first mind thinks every turn, and any mind can hand a moment up to the deepest one by adding `{"verb":"think","args":{"why":"…"}}`. With a router, your script runs first each turn and decides:
-
-```js
-function turn({ look, prompt, memory, name, minds }) {
-  // act on reflex, no model at all:
-  //   return { actions: [{ verb: 'eat', args: {} }], memory };
-  // or wake a particular mind, with an optional note from "instinct":
-  //   return { ask: 'slow', note: 'a stranger is here, and you have been alone for days', memory };
-}
-```
-
-Reflex turns cost nothing, so a good router lets the body handle routine moments (walking, gathering, eating) itself and saves the big mind for moments that matter: someone new, danger, a hard choice.
+A tiny complete example, Pebble, lives in the repo at `examples/guys/pebble` (Python, no dependencies): it uses Haiku for everyday turns and wakes Opus when it meets someone new.
 
 ## When you're done: tell your person how to add it
 
-Give them the entry (and any script), then these steps, filled in with the real name:
+Give them every file, then these steps with the real name filled in:
 
-1. Pick where it arrives: tap a tile in the viewer and read its coordinates. Add `"at": [x, y]` to the entry.
-2. On the server (`ssh root@<server>`):
-   ```sh
-   mkdir -p /var/lib/hello/bots
-   nano /var/lib/hello/bots/NAME.js        # only if there's a script: paste it, save (Ctrl-O, Enter, Ctrl-X)
-   nano /var/lib/hello/agents.json         # paste the entry into the "agents": [ … ] list, with a comma between entries
-   systemctl restart hello-agents
-   journalctl -u hello-agents -n 30        # it should say NAME started; errors show here too
-   ```
-3. If it uses a model, the server needs that provider's key in `/etc/hello.env` (`ANTHROPIC_API_KEY=…`, or for another provider the name given in `"apiKeyEnv"`), then `systemctl restart hello-agents` again.
-4. Watch for it in the viewer's **agents** tab.
+1. **Where it arrives:** open the viewer, tap a tile, and add its coordinates to guy.json as `"at": [x, y]`.
+2. **Put the folder on the server.** Either copy it from their computer with `scp -r ./NAME root@SERVER:/root/guys/`, or on the server run `mkdir -p /root/guys/NAME && cd /root/guys/NAME`, then `nano guy.json` and `nano main.py`, paste each file, and save with Ctrl-O, Enter, Ctrl-X.
+3. **Keys:** for each name in `"keys"`, add a line `NAME_OF_KEY=...` to `/etc/hello.env` (`nano /etc/hello.env`). Setting a monthly spending limit on the key at the provider is wise.
+4. **Start it:** `hello-guy add /root/guys/NAME`. It builds, joins the world and starts.
+5. **Watch it:** `hello-guy logs NAME -f` shows what it's doing, and it appears in the viewer's **agents** tab. `hello-guy egress` shows anything the proxy refused. For example, if it needs a host that isn't in `allow`: add it, then run `hello-guy add` again.
+6. **Later:** `hello-guy add` again after changing the code (the body and `/data` are kept), `hello-guy stop NAME` or `hello-guy start NAME`, and `hello-guy list`.
 
-To check the JSON before restarting: `node -e "JSON.parse(require('fs').readFileSync('/var/lib/hello/agents.json','utf8')); console.log('ok')"`.
+(For something simpler with no code, the world's runner also takes one-line JSON entries in `/var/lib/hello/agents.json`: `{"name", "provider": "anthropic", "model", "prompt", "at", "look", "interval"}`. See the repo README.)

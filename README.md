@@ -14,7 +14,7 @@ A persistent 2D world server that provides physics, not society. Agents are clie
 - **Event-sourced:** every action is appended to a SQLite log, and the whole state is rebuilt by replaying that log.
 - **No built-in society:** there is no currency, property, reputation, factions, voting, quests, goals or leaderboards. A few ruins lie far out, with something useful and a few words in each.
 
-See [DEPLOY.md](DEPLOY.md) to put a world online, and [CREATE.md](CREATE.md) for a brief you can hand to any model to design a little guy.
+See [DEPLOY.md](DEPLOY.md) to put a world online, and [CREATE.md](CREATE.md) for a brief you can hand to any model to design a little guy. Guys can be any program in any language: `hello-guy add <folder>` runs each in its own locked-down container that can reach only the world and the hosts it declares (`src/guy.ts`, `deploy/egress.mjs`).
 
 ## Run it
 
@@ -215,6 +215,7 @@ src/sandbox.ts  QuickJS runner for objects
 src/server.ts   HTTP API + viewer endpoints + SSE stream
 src/runner.ts   agent runner: providers, budgets, memory, intro prompt, scripted bots
 src/mcp.ts      MCP stdio adapter
+src/guy.ts      hello-guy: any program as a guy, in a sealed container (deploy/egress.mjs is its only door out)
 src/export.ts   static snapshot (--single: one file; --replay: opens in the replay)
 src/picture.ts  what a body sees, as a PNG (tiny rasteriser, no dependencies)
 tools/timelapse.mjs  a replay rendered to an animated GIF

@@ -1,0 +1,8 @@
+{
+  "name": "Pebble",
+  "at": [480, 500],
+  "look": { "species": "hedgehog", "fur": "#9a7a5a", "mark": "socks", "markColor": "#f4efe6" },
+  "keys": ["ANTHROPIC_API_KEY"],
+  "allow": ["api.anthropic.com"],
+  "memory": "256m"
+}

@@ -16,7 +16,8 @@ BRANCH=${BRANCH:-claude/hello-world-server-wzk8ks}
 echo "== packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq git curl ufw sqlite3 ca-certificates >/dev/null
+apt-get install -y -qq git curl ufw sqlite3 ca-certificates docker.io >/dev/null
+systemctl enable --now docker >/dev/null
 if ! node -v 2>/dev/null | grep -qE '^v2[2-9]'; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y -qq nodejs >/dev/null
@@ -109,8 +110,16 @@ ls -1t /var/lib/hello/backups/world-*.db | tail -n +15 | xargs -r rm --
 EOF
 chmod +x /etc/cron.daily/hello-backup
 
-echo "== firewall: ssh, and everything over tailscale only"
-ufw allow OpenSSH >/dev/null; ufw allow in on tailscale0 >/dev/null; ufw --force enable >/dev/null
+echo "== guys in containers (hello-guy)"
+mkdir -p /var/lib/hello/guys
+printf '#!/bin/sh\nexec /usr/bin/node --disable-warning=ExperimentalWarning /opt/hello/src/guy.ts "$@"\n' > /usr/local/bin/hello-guy
+chmod +x /usr/local/bin/hello-guy
+docker pull -q node:22-slim >/dev/null; docker pull -q python:3.12-slim >/dev/null
+
+echo "== firewall: ssh, everything over tailscale, and the guys' door to the world"
+ufw allow OpenSSH >/dev/null; ufw allow in on tailscale0 >/dev/null
+ufw allow in on docker0 to any port "${PORT:-7777}" proto tcp >/dev/null
+ufw --force enable >/dev/null
 
 systemctl daemon-reload
 systemctl enable --now hello >/dev/null
@@ -120,5 +129,6 @@ echo
 echo "Done. The world: http://$TS_IP:7777  (open it on any device in your tailnet)"
 echo "Agents:   edit /var/lib/hello/agents.json, then: systemctl restart hello-agents"
 echo "API key:  edit /etc/hello.env, then: systemctl restart hello-agents"
+echo "Guys in containers: hello-guy add <folder>   (see CREATE.md); hello-guy list"
 echo "Logs:     journalctl -u hello -u hello-agents -f"
 echo "Stop all agents at once: touch /var/lib/hello/STOP   (rm it to let them run again)"
