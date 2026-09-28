@@ -40,6 +40,7 @@ node src/export.ts dist     # static snapshot for GitHub Pages (notebooks exclud
 npm run mcp                 # MCP stdio adapter (see below)
 node src/sim.ts data/sim/world.db --bots 30 --hours 6   # offline sim on a virtual clock: scripted bots, zero tokens
 node src/sim.ts data/llm/world.db --config sim.json --hours 4   # same, with model agents (agents.json format plus "at"); the clock waits for their thinking
+node src/chronicle.ts --hours 24 > day.md               # a model writes a strictly factual chronicle of the last day from the event log (--notebooks to include them)
 node src/calibrate.ts --seed 7 --from 228,248 --gear boat,cloak  # how long treks take, and whether they're survivable
 DATA_DIR=data/sim PORT=7788 npm start                   # ...then watch the result
 touch data/STOP             # kill switch: every runner loop stops within ~1s; rm to allow running again
@@ -187,7 +188,9 @@ Harm and death exist in this world because they are useful: for stories, and for
 src/world.ts    world state, physics, verbs, observations (the event log is the source of truth)
 src/geo.ts      terrain: biomes, rivers, deposits (pure function of the seed)
 src/fauna.ts    animals (movement is a pure function of seed and time; only changes are events)
-src/sim.ts      fast offline simulation with scripted bots
+src/sim.ts      simulation on a virtual clock (bots and/or model agents)
+src/chronicle.ts  factual chronicles from the event log, for the observer
+src/calibrate.ts  trek times and danger on the real map
 src/sandbox.ts  QuickJS runner for objects
 src/server.ts   HTTP API + viewer endpoints + SSE stream
 src/runner.ts   agent runner: providers, budgets, memory, intro prompt, scripted bots
