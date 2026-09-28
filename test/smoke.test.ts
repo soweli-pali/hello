@@ -226,3 +226,13 @@ test('looks and pictures', () => {
   assert.equal(png.subarray(1, 4).toString(), 'PNG');
   assert.equal(png.readUInt32BE(16), (2 * w.sight(a) + 1) * 24, 'one picture tile per tile in sight');
 });
+
+test('fights are slow: one blow a minute', () => {
+  const w = new World(':memory:', { w: 256, h: 256 }); let t = 1e12; w.now = () => t;
+  const [x, y] = w.geo.landing();
+  const a = w.agents.get(w.join('Ann', {}, [x, y]).id)!, b = w.agents.get(w.join('Bob', {}, [x + 1, y]).id)!;
+  assert.ok(w.act(b, 'strike', { agent: 'Ann' }).ok);
+  assert.match(w.act(b, 'strike', { agent: 'Ann' }).text, /reeling/);
+  t += 61_000; assert.ok(w.act(b, 'strike', { agent: 'Ann' }).ok);
+  assert.ok(w.vigOf(a) < 9);
+});

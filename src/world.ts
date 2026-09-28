@@ -53,6 +53,7 @@ export const BLOCKS: Record<string, BlockType> = {
   skylight:  { needs: { sand: 2, wood: 1 }, s: 1, roof: true, color: '#cfe8ee', words: 'glass skylight roof' },
 };
 export const FIRE_MS = 4 * 3600_000;
+export const STRIKE_GAP = 60_000; // a body can be struck at most once a minute
 export const DYES: Record<string, string> = { ochre: '#b5532f', indigo: '#2f408c', shell: '#f2eadd' };
 function hexMix(cols: string[]) {
   const v = cols.map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)));
@@ -108,7 +109,7 @@ export interface Agent {
   id: string; name: string; x: number; y: number;
   ap: number; apT: number; vig: number; vigT: number; mats: Record<string, number>;
   notebook: string; blocked: Set<string>; state: 'active' | 'resting' | 'left' | 'dead';
-  deadUntil: number; lastBite: number; deaths: number; home: [number, number];
+  deadUntil: number; lastBite: number; lastStruck?: number; deaths: number; home: [number, number];
   joined: number; lastSeen: number; meta: Record<string, unknown>;
   hearCursor: number; // in-memory only: last event seq this agent has been shown
 }
@@ -241,7 +242,7 @@ export class World {
       }
       case 'eat': ag!.mats.food -= e.n; break;
       case 'strike': {
-        if (e.target) { const v = this.agents.get(e.target)!; v.vig = this.vigOf(v, e.t) - e.dmg; v.vigT = e.t; }
+        if (e.target) { const v = this.agents.get(e.target)!; v.vig = this.vigOf(v, e.t) - e.dmg; v.vigT = e.t; v.lastStruck = e.t; }
         if (e.animal) {
           const an = this.fauna.byId.get(e.animal)!;
           an.hp -= e.dmg;
@@ -857,7 +858,7 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   strike: {
-    help: 'Hit an adjacent agent or animal: 1 damage (3 with a spear). Killing an animal yields food and fiber. 3 AP.',
+    help: 'Hit an adjacent agent or animal: 1 damage (3 with a spear). A person can take at most one blow a minute. Killing an animal yields food and fiber. 3 AP.',
     args: { agent: 'agent name', animal: 'animal id' },
     run: (w, a, x) => {
       const dmg = w.has(a, 'spear') ? 3 : 1;
@@ -883,6 +884,8 @@ export const VERBS: Record<string, Verb> = {
       const b = w.find(x.agent); if (!b || b.id === a.id || b.state === 'dead' || b.state === 'left') throw new Error('No such agent here.');
       w.near(a, b.x, b.y, 1);
       if (w.safe(b.x, b.y)) throw new Error('Nobody can be harmed on this safe ground.');
+      // fights are slow: a body takes at most one blow a minute, so anyone struck has time to answer, flee or plead
+      const since = w.now() - (b.lastStruck ?? 0); if (since < STRIKE_GAP) throw new Error(`${b.name} is still reeling from the last blow; you can strike again in ${Math.ceil((STRIKE_GAP - since) / 1000)}s.`);
       w.need(a, 3);
       w.emit('strike', a.id, { target: b.id, dmg, x: b.x, y: b.y, cost: 3 });
       if (w.vigOf(b) <= 0) { w.kill(b, `struck down by ${a.name}`); return { ok: true, text: `You struck ${b.name}. They fall and die, dropping everything they carried.` }; }
@@ -924,7 +927,7 @@ export function rulesText(cfg: Config) {
     `- The land is ${cfg.w}x${cfg.h} tiles of forests, meadows, marshes, deserts, tundra, mountain ranges, rivers and sea. Travel is slow and some places are dangerous.`,
     `- Land yields a little of what it is (forest: wood, mountain: stone, desert: sand, marsh: clay, meadow: fiber); richer deposits of each, and of rarer things, lie in particular places. Gathering takes from the tile you stand on, and it regrows slowly.`,
     `- Actions cost action points (max ${cfg.apMax}, +1 every ${cfg.apSec}s). Thinking, looking and writing notes are free.`,
-    `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Deserts drain it without a waterskin, cold without a cloak, water without a boat; wolves bite at night${cfg.harm ? '; other agents can strike you' : ''}.`,
+    `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Deserts drain it without a waterskin, cold without a cloak, water without a boat; wolves bite at night${cfg.harm ? '; other agents can strike you (1 damage, 3 with a spear, at most one blow a minute, so a fight takes minutes and you will have turns to answer, flee or plead)' : ''}.`,
     cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
       : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at your home (where you first arrived) with nothing, remembering what you remember.`,
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),

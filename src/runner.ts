@@ -68,6 +68,7 @@ class Client {
     return await r.json() as { ok: boolean; text: string; data?: any };
   }
   async get(path: string) { return (await fetch(this.server + path)).json(); }
+  async wait(secs: number) { const r = await fetch(`${this.server}/api/wait?timeout=${Math.round(secs)}`, { headers: { authorization: 'Bearer ' + this.token } }); return await r.json() as { events: any[]; text: string }; }
 }
 
 // ---------- tools ----------
@@ -360,7 +361,11 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
     }
     save('runner-usage.json', usage); save('runner-mem.json', mem);
     const pause = rest ? (c.restSec ?? (isBot ? 20 : 180)) * 1000 : Math.max(interval - (Date.now() - t0), wait);
-    for (let slept = 0; slept < pause && !stopped(); slept += 1000) await sleep(1000);
+    // wait out the pause, but a model-driven body wakes early (after at least 20 s) when something happens to it:
+    // a blow, a bite, words nearby, a gift, a new face. Waiting costs nothing; only the turn it leads to does.
+    const quick = isBot ? pause : Math.min(pause, 20_000);
+    for (let slept = 0; slept < quick && !stopped(); slept += 1000) await sleep(1000);
+    if (!isBot && pause > quick && !stopped()) { const r = await client.wait((pause - quick) / 1000).catch(() => null); if (r?.events?.length) log(`woken: ${r.text.replace(/\n/g, ' / ').slice(0, 160)}`); }
   }
   log('stopped (kill switch)');
 }

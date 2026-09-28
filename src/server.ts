@@ -97,6 +97,27 @@ export function startServer(w: World, port: number, host: string) {
         if (!a) return send(res, 401, { ok: false, text: 'bad token' });
         const png = picture(w, a); res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' }); return res.end(png);
       }
+      if (p === '/api/wait') { // sleep until something happens to you (a blow, a bite, words nearby, a gift, someone appearing), or the timeout
+        const a = w.auth(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
+        if (!a) return send(res, 401, { ok: false, text: 'bad token' });
+        const secs = Math.max(1, Math.min(900, Number(url.searchParams.get('timeout') ?? 300))), got: { type: string; text: string; t: number }[] = [];
+        const name = (id?: string) => (id && w.agents.get(id)?.name) || 'someone';
+        const sight = w.sight(a), seen = new Set([...w.agents.values()].filter(o => w.dist(a.x, a.y, o.x, o.y) <= sight).map(o => o.id));
+        const f = (e: any) => {
+          let text = '';
+          if (e.a === a.id) return;
+          if (e.type === 'strike' && e.target === a.id) text = `${name(e.a)} struck you (vigor now ${w.vigOf(a).toFixed(1)}).`;
+          else if (e.type === 'hurt' && e.a === a.id) text = `You were bitten (vigor now ${w.vigOf(a).toFixed(1)}).`;
+          else if (e.type === 'say' && w.dist(a.x, a.y, e.x ?? a.x, e.y ?? a.y) <= (e.loud ? w.cfg.hear * 3 : w.cfg.hear) && !a.blocked.has(e.a)) text = `${name(e.a)} said: "${String(e.text).slice(0, 300)}"`;
+          else if (e.type === 'transfer' && e.to?.a === a.id) text = `${name(e.a)} gave you something.`;
+          else if ((e.type === 'join' || e.type === 'move') && w.dist(a.x, a.y, e.x, e.y) <= sight && !seen.has(e.a)) { seen.add(e.a); text = `${name(e.a)} is in sight.`; }
+          else if (e.type === 'die' && e.a && w.dist(a.x, a.y, e.x, e.y) <= sight) text = `${name(e.a)} died nearby.`;
+          if (text) { got.push({ type: e.type, text, t: e.t }); done(); }
+        };
+        let timer: any; const done = () => { clearTimeout(timer); setTimeout(() => { if (!res.writableEnded) { w.listeners.delete(f); send(res, 200, { ok: true, events: got, text: got.length ? got.map(g => g.text).join('\n') : 'Nothing happened.' }); } }, 300); };
+        w.listeners.add(f); timer = setTimeout(done, secs * 1000); req.on('close', () => { clearTimeout(timer); w.listeners.delete(f); });
+        return;
+      }
       if (p === '/api/intro') { // everything a new body should be told, ready to use as a model's system prompt
         const verbs = Object.fromEntries(Object.entries(VERBS).map(([k, v]) => [k, { help: v.help, args: v.args }]));
         return send(res, 200, { text: intro(rulesText(w.cfg)) + '\n\nVerbs:\n' + verbList(verbs), verbs });

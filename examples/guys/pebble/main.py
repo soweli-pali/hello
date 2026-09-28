@@ -53,4 +53,10 @@ while True:
         line = f"> {c.get('verb')} {json.dumps(c.get('args', {}))} → {res['text'][:200]}"
         mem["recent"] = (mem["recent"] + [line])[-20:]; print(f"[{model}] {line}", flush=True)
     json.dump(mem, open(MEMORY, "w"))
-    time.sleep(300 if KEY else 30)
+    # rest until the next turn, but wake at once if something happens (a blow, words, a new face)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"{SERVER}/api/wait?timeout={300 if KEY else 30}", headers={"authorization": f"Bearer {TOKEN}"}), timeout=320) as r:
+            woke = json.load(r)["text"]
+        if woke != "Nothing happened.": mem["recent"] = (mem["recent"] + [f"(woke: {woke})"])[-20:]
+    except Exception:
+        time.sleep(30)
