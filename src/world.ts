@@ -552,7 +552,7 @@ export const VERBS: Record<string, Verb> = {
   },
   move: {
     help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear. {to:"home"} always works and is free, but you arrive with nothing: all you carry is left where you stood.',
-    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', to: '"home" (where you first arrived)', force: 'true to keep walking even if a step would kill you' },
+    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or "home", or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', to: '"home" (where you first arrived)', force: 'true to keep walking even if a step would kill you' },
     run: (w, a, x) => {
       if (x.to === 'spawn' || x.to === 'home') {
         const s = w.homeSpot(a); w.emit('home', a.id, { from: [a.x, a.y], ...s });
@@ -562,9 +562,12 @@ export const VERBS: Record<string, Verb> = {
       if (x.dir) { const d = DIRS[String(x.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); [dx, dy] = d; steps = Math.max(1, Math.min(10, Math.trunc(x.steps ?? 1))); }
       else if (x.toward) {
         const t = String(x.toward).replace(/^#/, ''), ag = w.find(t), an = w.fauna.byId.get(t), it = w.items.get(t);
-        const p = ag && ag.state !== 'left' && ag.state !== 'dead' ? [ag.x, ag.y] : an && w.fauna.alive(an, w.now()) ? w.animalPos(an) : it ? w.posOf(it) : null;
-        if (!p || w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error(`You can't see "${x.toward}" from here.`);
-        dest = [p[0], p[1]];
+        if (/^home$/i.test(t)) dest = [a.home[0], a.home[1]]; // everyone can find their way home
+        else {
+          const p = ag && ag.state !== 'left' && ag.state !== 'dead' ? [ag.x, ag.y] : an && w.fauna.alive(an, w.now()) ? w.animalPos(an) : it ? w.posOf(it) : null;
+          if (!p || w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error(`You can't see "${x.toward}" from here.`);
+          dest = [p[0], p[1]];
+        }
       } else if (x.x !== undefined && x.y !== undefined) dest = w.target(a, x);
       else throw new Error('move needs dir (+steps), toward, or to:"home"');
       let cx = a.x, cy = a.y, cost = 0, dv = 0; const notes: string[] = []; let why = '';
@@ -726,6 +729,7 @@ export const VERBS: Record<string, Verb> = {
     help: 'Give an item or materials to an agent, object or animal within reach, or to "ground" to leave it here. Animals can be fed food; some can be won over and will follow you and carry for you. 1 AP.',
     args: { to: 'agent name, object id, animal id, or "ground"', item: 'item id', material: 'material name', n: 'amount of material' },
     run: (w, a, x) => {
+      if (x.item && !w.items.has(String(x.item).replace(/^#/, '')) && MATERIALS.includes(String(x.item) as Material)) x = { ...x, material: x.item, item: undefined };
       let to: Loc, target: Agent | undefined, obj: Item | undefined;
       const tname = String(x.to ?? '').replace(/^#/, ''), an = w.fauna.byId.get(tname);
       if (an) {

@@ -55,7 +55,8 @@ async function turn(b: Body) {
   }
   if (!b.bot) {
     b.m.recent = b.m.recent.slice(-12); b.m.steps++;
-    if (b.m.steps % 15 === 0) { try { const s = await b.think(system, user + SUMMARY_ASK, null); b.m.summary = s.text.trim().slice(0, 1500); b.tokens += s.tokens; log(`${b.c.name} summary: ${b.m.summary.replace(/\n/g, ' ')}`); } catch { /* keep the old one */ } }
+    // the summary is written in the background, off the path of the agent's next turn
+    if (b.m.steps % 15 === 0) b.think(system, user + SUMMARY_ASK, null).then(s => { b.m.summary = s.text.trim().slice(0, 1500); b.tokens += s.tokens; log(`${b.c.name} summary: ${b.m.summary.replace(/\n/g, ' ')}`); }).catch(() => { /* keep the old one */ });
   }
   const every = (b.c.interval ?? (b.bot ? 20 : 180)) * 1000;
   b.next = clock + (rest ? (b.c.restSec ?? (b.bot ? 120 : 600)) * 1000 : every * (0.9 + Math.random() * 0.2));

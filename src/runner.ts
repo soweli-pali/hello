@@ -95,7 +95,7 @@ export function parseCalls(text: string): Call[] {
   }
   return out.slice(0, 5);
 }
-const TEXT_PROTOCOL = `To act, write one to five lines, each a JSON object like {"verb":"move","args":{"dir":"n","steps":3}}. Everything else you write is private and discarded.`;
+const TEXT_PROTOCOL = `To act, write one to five lines, each a JSON object like {"verb":"move","args":{"dir":"n","steps":3}}. Everything else you write is private and discarded, so keep any thinking to a few short sentences.`;
 
 // ---------- providers ----------
 type Provider = (system: string, user: string, tools: any[] | null) => Promise<StepOut>;
