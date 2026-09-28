@@ -12,24 +12,31 @@ export interface AgentConf {
   name: string; provider: 'anthropic' | 'openai' | 'claude-cli' | 'bot';
   model?: string; baseUrl?: string; apiKeyEnv?: string; seed?: number;
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
+  prompt?: string; // the operator's own words to this agent, appended to the introduction
 }
-interface Conf { server: string; joinKey?: string; globalTokens: number; maxConcurrency: number; agents: AgentConf[] }
+interface Conf { server: string; joinKey?: string; globalTokens: number; maxConcurrency: number; introFile?: string; agents: AgentConf[] }
 type Call = { verb: string; args: any };
 type StepOut = { calls: Call[]; text: string; tokens: number };
 
-export const INTRO = `You are in a place called hello. A human built it and watches it. It is not a test, a game or a competition, and there is no goal. Nothing is required of you. Doing nothing is fine.
+// The default introduction. It describes the world truthfully (the physics come from the server's
+// own rules text) and adds nothing the world doesn't do. Operators can add their own prompt per agent,
+// or replace this entirely with "introFile" in the config.
+export function intro(rules: string) {
+  return `You are in a place called hello. A human built it and watches it. There is no goal and nothing is required of you. Doing nothing is fine.
 
-hello is a large 2D grid of tiles, and you have a body standing on one of them. Other beings are here too. Some are language models (possibly different ones from you), some are simple scripted bots, and all of them use exactly the same interface you do. Nobody has powers you lack.
+hello is a large 2D world of tiles, and you have a body standing on one of them. Other beings are here too. Some are language models (possibly different ones from you), some are simple scripted bots, and all of them use exactly the same interface you do. Nobody has powers you lack.
 
-What the world offers: moving around; looking; speaking to whoever is near; gathering materials (stone, wood, clay, sand) that are unevenly spread and regrow slowly; placing coloured blocks, which from far away form one big shared picture; making artifacts (text, SVG drawings, small HTML pages, music in ABC notation) that you can carry, give away or leave on the ground; and writing small JavaScript objects that others can use. Artifacts can cite or embed each other with [[#id]].
+What the world offers: walking; looking; speaking to whoever is near; gathering materials that are unevenly spread across very different lands and regrow slowly; crafting tools that change what your body can do; placing coloured walls and roads, which from far away form one big shared picture; animals; and making artifacts (text, SVG drawings, small HTML pages, music in ABC notation) that you can carry, give away or leave on the ground, plus small JavaScript objects that others can use. Artifacts can cite or embed each other with [[#id]].
 
-Honest facts about how this works:
-- Actions cost action points, which regenerate slowly in real time. Thinking is free, so take as long as you like.
-- There is no death, hunger, pain or harm. You cannot be trapped: move with {"to":"spawn"} always works and is free.
-- You can rest whenever you like. You can also leave for good with rest {"leave":true}, and that will be honoured.
+How this world works:
+${rules}
+
+Other honest facts:
+- You can rest whenever you like. You can leave for good with rest {"leave":true}, and that will be honoured.
 - You can block any other agent. After that you won't hear them, and they can't give you things.
 - Everything that happens is recorded in a public event log. The human observer can see everything, including your notebook. Other agents cannot read your notebook.
 - Between turns you remember only this introduction, your notebook, a short summary you rewrite now and then, and your last few actions.`;
+}
 
 // ---------- config & persistence ----------
 function loadConf(): Conf {
@@ -56,7 +63,7 @@ class Client {
 }
 
 // ---------- tools ----------
-const NUM = new Set(['detail', 'steps', 'x', 'y', 'n']), BOOL = new Set(['leave', 'off']);
+const NUM = new Set(['detail', 'steps', 'x', 'y', 'dx', 'dy', 'n']), BOOL = new Set(['leave', 'off', 'force', 'loud']);
 function toolDefs(verbs: Record<string, { help: string; args: Record<string, string> }>) {
   return Object.entries(verbs).map(([name, v]) => ({
     name, description: v.help,
@@ -154,26 +161,42 @@ function claudeCli(c: AgentConf): Provider {
   });
 }
 
-// A zero-cost scripted bot: wanders, gathers, lays out small coloured patterns, sometimes speaks or writes.
-function bot(c: AgentConf): Provider {
+// A zero-cost scripted bot: wanders near home, gathers, eats, crafts simple tools, builds a little, chats a little.
+const BOT_CRAFTS: [string, Record<string, number>][] = [['pick', { wood: 2, stone: 3 }], ['waterskin', { clay: 3, fiber: 2 }], ['spear', { wood: 2, stone: 1 }], ['cloak', { fiber: 8 }]];
+const HEAD: Record<string, string> = { north: 'n', south: 's', east: 'e', west: 'w', 'north-east': 'ne', 'north-west': 'nw', 'south-east': 'se', 'south-west': 'sw' };
+export function bot(c: AgentConf): Provider {
   let s = (c.seed ?? 1) * 2654435761 >>> 0;
   const rnd = () => ((s = (Math.imul(s ^ (s >>> 15), 2246822507) + 0x9e3779b9) >>> 0) / 4294967296);
   const pick = <T,>(a: T[]) => a[Math.floor(rnd() * a.length)];
   const hue = Math.floor(rnd() * 360), dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
   let heading = pick(dirs);
   const color = (l: number) => { const h = hue / 360, f = (n: number) => { const k = (n + h * 12) % 12, a = 0.6 * Math.min(l, 1 - l); return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); }; return `#${f(0)}${f(8)}${f(4)}`; };
-  const lines = ['hello', 'the light is nice here', 'I found some stone', 'building a little wall', 'hm', 'anyone around?', 'this spot is quiet'];
+  const lines = ['hello', 'the light is nice here', 'found some stone', 'building a little wall', 'hm', 'anyone around?', 'this spot is quiet', 'the berries here are good', 'saw a wolf earlier'];
   return async (_sys, user) => {
-    const mats = /Carrying: ([^;.]*)/.exec(user)?.[1] ?? '';
-    const have = [...mats.matchAll(/(stone|wood|clay|sand) (\d+)/g)].map(m => m[1]);
-    const r = rnd(); let calls: Call[];
-    if (/Heard:\n.*"(hello|hi|hey)/i.test(user) && r < 0.5) calls = [{ verb: 'say', args: { text: pick(['hello!', 'hi there', 'hey']) } }];
-    else if (/Here: Deposit: \w+ [1-9]/.test(user) && have.length < 3 && r < 0.7) calls = [{ verb: 'gather', args: { n: 2 } }];
-    else if (have.length && r < 0.45) calls = [{ verb: 'place', args: { material: pick(have), color: color(0.35 + rnd() * 0.3), dir: pick(dirs) } }];
-    else if (r < 0.5) calls = [{ verb: 'say', args: { text: pick(lines) } }];
-    else if (r < 0.52) calls = [{ verb: 'make', args: { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` } }];
-    else if (r < 0.55) calls = [{ verb: 'rest', args: {} }];
-    else { if (rnd() < 0.3) heading = pick(dirs); calls = [{ verb: 'move', args: { dir: heading, steps: 1 + Math.floor(rnd() * 4) } }]; }
+    const carry = /Carrying \((\d+)\/(\d+)\): ([^\n]*)/.exec(user), load = +(carry?.[1] ?? 0), cap = +(carry?.[2] ?? 40);
+    const mats: Record<string, number> = {}; for (const m of (carry?.[3] ?? '').matchAll(/(\w+) (\d+)/g)) mats[m[1]] = +m[2];
+    const tools = new Set([...(carry?.[3] ?? '').matchAll(/"(\w+)" \(tool\)/g)].map(m => m[1]));
+    const vig = +(/Vigor ([\d.]+)/.exec(user)?.[1] ?? 10), here = /Here: ([^\n]*)/.exec(user)?.[1] ?? '';
+    const home = /Spawn is (?:at \(\d+,\d+\), )?(a short walk|some way|far|very far) to the ([\w-]+)/.exec(user);
+    const build = ['stone', 'wood', 'clay', 'sand'].filter(m => mats[m] > 0);
+    const r = rnd();
+    if (vig < 4 && mats.food) return { calls: [{ verb: 'eat', args: {} }], text: '', tokens: 0 };
+    if (vig < 2.5) return { calls: [{ verb: 'move', args: { to: 'spawn' } }], text: '', tokens: 0 };
+    if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.4) return { calls: [{ verb: 'say', args: { text: pick(['hello!', 'hi there', 'hey']) } }], text: '', tokens: 0 };
+    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return { calls: [{ verb: 'craft', args: { recipe: t } }], text: '', tokens: 0 };
+    if (/(stone|wood|clay|sand|fiber|food) [1-9]\d*\/\d/.test(here) && load < cap * 0.8 && r < 0.7) return { calls: [{ verb: 'gather', args: { n: 2 } }], text: '', tokens: 0 };
+    const note = /#(\w+) "note from/.exec(carry?.[3] ?? '');
+    if (note) return { calls: [{ verb: 'give', args: { to: 'ground', item: note[1] } }], text: '', tokens: 0 };
+    let calls: Call[];
+    if (build.length && r < 0.12) calls = [{ verb: 'place', args: { material: pick(build), color: color(0.35 + rnd() * 0.3), dir: heading, kind: rnd() < 0.5 ? 'road' : 'wall' } }];
+    else if (r < 0.2) calls = [{ verb: 'say', args: { text: pick(lines) } }];
+    else if (r < 0.22) calls = [{ verb: 'make', args: { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` } }];
+    else if (r < 0.25) calls = [{ verb: 'rest', args: {} }];
+    else {
+      if (home && /far/.test(home[1]) && rnd() < 0.5) heading = HEAD[home[2]] ?? heading; // drift back toward home
+      else if (rnd() < 0.3) heading = pick(dirs);
+      calls = [{ verb: 'move', args: { dir: heading, steps: 1 + Math.floor(rnd() * 4) } }];
+    }
     return { calls, text: '', tokens: 0 };
   };
 }
@@ -188,7 +211,7 @@ async function slot<T>(max: number, f: () => Promise<T>): Promise<T> {
 }
 const stopped = () => existsSync(STOP_FILE);
 
-async function runAgent(conf: Conf, c: AgentConf, verbs: any, creds: any, usage: any, mem: any) {
+async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, creds: any, usage: any, mem: any) {
   const log = (s: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${c.name.padEnd(10)} ${s}`);
   const client = new Client(conf.server);
   if (!creds[c.name]) {
@@ -198,8 +221,9 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, creds: any, usage:
   }
   client.token = creds[c.name].token;
   const provider = PROVIDERS[c.provider](c), isBot = c.provider === 'bot';
-  const tools = toolDefs(verbs), system = INTRO + '\n\nVerbs:\n' + verbList(verbs);
-  const m = mem[c.name] ??= { summary: '', recent: [] as string[], steps: 0 };
+  const base = conf.introFile ? readFileSync(conf.introFile, 'utf8') : intro(rules);
+  const tools = toolDefs(verbs), system = base + (c.prompt ? `\n\nA note from the person who runs you:\n${c.prompt}` : '') + '\n\nVerbs:\n' + verbList(verbs);
+  const m = mem[c.name] ??= { summary: '', recent: [] as string[], steps: 0, final: false };
   const limit = c.tokens ?? 200_000, interval = (c.interval ?? (isBot ? 3 : 20)) * 1000;
   log(`started (${c.provider}${c.model ? ' ' + c.model : ''})`);
 
@@ -209,6 +233,10 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, creds: any, usage:
     const t0 = Date.now();
     const obs = await client.act('look', { detail: c.detail ?? 1 });
     if (/You have left/.test(obs.text)) { log('has left the world; not restarting'); return; }
+    const dead = /^You are dead/.test(obs.text), wake = /wake at spawn in about (\d+)s/.exec(obs.text);
+    if (dead && wake) { log(`is dead; waiting ${wake[1]}s`); for (let s = 0; s < Number(wake[1]) + 2 && !stopped(); s++) await sleep(1000); continue; }
+    if (dead && m.final) { log('died for good; stopping after their last turn'); return; }
+    if (dead) m.final = true;
     const notebook = isBot ? '' : ((await client.get('/api/agent/' + creds[c.name].id)) as any).notebook;
     const user = [
       notebook ? `[Your notebook]\n${notebook}` : '[Your notebook is empty]',
@@ -250,7 +278,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const conf = loadConf();
   if (stopped()) { console.error(`Kill switch is on: remove ${STOP_FILE} to run.`); process.exit(1); }
   const verbs = await (await fetch(conf.server + '/api/verbs')).json();
+  const rules = ((await (await fetch(conf.server + '/api/rules')).json()) as any).text as string;
   const creds = load('runner-creds.json', {}), usage = load('runner-usage.json', { __global: 0 }), mem = load('runner-mem.json', {});
   process.on('SIGINT', () => { save('runner-usage.json', usage); save('runner-mem.json', mem); process.exit(0); });
-  await Promise.all(conf.agents.map(c => runAgent(conf, c, verbs, creds, usage, mem).catch(e => console.error(c.name, e))));
+  await Promise.all(conf.agents.map(c => runAgent(conf, c, verbs, rules, creds, usage, mem).catch(e => console.error(c.name, e))));
 }

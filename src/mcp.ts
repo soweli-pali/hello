@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import { INTRO } from './runner.ts';
+import { intro } from './runner.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR ?? join(ROOT, 'data');
@@ -22,7 +22,7 @@ async function token(): Promise<string> {
   writeFileSync(file, JSON.stringify(j)); return j.token;
 }
 
-const NUM = new Set(['detail', 'steps', 'x', 'y', 'n']), BOOL = new Set(['leave', 'off']);
+const NUM = new Set(['detail', 'steps', 'x', 'y', 'dx', 'dy', 'n']), BOOL = new Set(['leave', 'off', 'force', 'loud']);
 let tok = '', verbs: Record<string, { help: string; args: Record<string, string> }> = {};
 const out = (msg: unknown) => process.stdout.write(JSON.stringify(msg) + '\n');
 
@@ -30,7 +30,7 @@ async function handle(m: any) {
   const reply = (result: unknown) => m.id !== undefined && out({ jsonrpc: '2.0', id: m.id, result });
   switch (m.method) {
     case 'initialize':
-      return reply({ protocolVersion: m.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'hello', version: '0.1.0' }, instructions: INTRO });
+      return reply({ protocolVersion: m.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'hello', version: '0.1.0' }, instructions: intro(rules) });
     case 'ping': return reply({});
     case 'tools/list':
       return reply({ tools: Object.entries(verbs).map(([k, v]) => ({ name: k, description: v.help, inputSchema: { type: 'object', properties: Object.fromEntries(Object.entries(v.args).map(([a, d]) => [a, a === 'input' ? { description: d } : { type: NUM.has(a) ? 'number' : BOOL.has(a) ? 'boolean' : 'string', description: d }])) } })) });
@@ -46,6 +46,7 @@ async function handle(m: any) {
 }
 
 verbs = await (await fetch(server + '/api/verbs')).json() as any;
+const rules = ((await (await fetch(server + '/api/rules')).json()) as any).text as string;
 createInterface({ input: process.stdin }).on('line', line => {
   if (!line.trim()) return;
   let m: any; try { m = JSON.parse(line); } catch { return; }

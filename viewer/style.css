@@ -64,3 +64,6 @@ pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono);
 .ev { font: 11px/1.4 var(--mono); padding: 3px 0; border-bottom: 1px solid #202722; word-break: break-all; }
 svg.lineage { width: 100%; background: #121713; border-radius: 8px; border: 1px solid var(--line); }
 svg.lineage text { fill: var(--fg); font-size: 10px; }
+
+.bar { display: inline-block; width: 70px; height: 8px; border-radius: 4px; background: #2a332d; overflow: hidden; vertical-align: 0; }
+.bar i { display: block; height: 100%; }

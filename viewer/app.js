@@ -21,11 +21,13 @@ const h = (tag, attrs = {}, ...kids) => {
 };
 const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000 | 0); return s < 60 ? `${s}s` : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d`; };
 const hueOf = s => { let x = 0; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) | 0; return Math.abs(x) % 360; };
-const STR = { stone: 4, wood: 3, clay: 2, sand: 1 };
-const MATCOL = { stone: [138, 146, 158], wood: [76, 128, 62], clay: [184, 104, 64], sand: [222, 198, 124] };
+const STR = { stone: 4, wood: 3, clay: 2, sand: 1, ore: 8, crystal: 3 };
+const MATCOL = { stone: [150, 152, 158], wood: [52, 104, 44], clay: [184, 104, 70], sand: [226, 206, 136], fiber: [168, 196, 104], food: [200, 72, 112], ore: [132, 92, 176], crystal: [120, 236, 244] };
+const BIOCOL = { sea: [20, 44, 70], river: [38, 84, 118], meadow: [66, 92, 54], forest: [34, 64, 40], marsh: [58, 72, 58], desert: [168, 142, 92], tundra: [156, 168, 174], mountain: [98, 92, 86], peak: [204, 212, 220] };
+const BEAST = { deer: '#c89a62', goat: '#eeeae0', wolf: '#565b63' };
 
 // ---------------- state ----------------
-const S = { cfg: null, agents: new Map(), blocks: new Map(), tileItems: new Map(), materials: [], seq: 0, speech: [], sel: null, time: null };
+const S = { cfg: null, agents: new Map(), blocks: new Map(), tileItems: new Map(), piles: new Set(), animals: new Map(), materials: [], biomes: [], spawn: [0, 0], seq: 0, speech: [], sel: null, time: null };
 const cv = $('#map'), cx = cv.getContext('2d');
 let terrain, blockLayer, W = 256, H = 256;
 const view = { x: 128, y: 128, z: 4 }; // z = pixels per tile
@@ -33,15 +35,18 @@ let dirty = true;
 
 async function boot() {
   const [snap, ter] = await Promise.all([api('/api/world'), api('/api/terrain')]);
-  S.cfg = snap.cfg; W = snap.cfg.w; H = snap.cfg.h; S.materials = snap.materials; S.seq = snap.seq;
+  S.cfg = snap.cfg; W = snap.cfg.w; H = snap.cfg.h; S.materials = snap.materials; S.biomes = snap.biomes; S.spawn = snap.spawn; S.seq = snap.seq;
   for (const a of snap.agents) S.agents.set(a.id, { ...a, dx: a.x, dy: a.y });
-  for (const [x, y, color, m, s] of snap.blocks) S.blocks.set(`${x},${y}`, { color, m, s });
+  for (const [x, y, color, m, s, kind] of snap.blocks) S.blocks.set(`${x},${y}`, { color, m, s, kind });
+  for (const [x, y] of snap.piles ?? []) S.piles.add(`${x},${y}`);
   for (const [x, y, n] of snap.tileItems) S.tileItems.set(`${x},${y}`, n);
   buildTerrain(ter.data); rebuildBlocks();
   const saved = JSON.parse(localStorage.getItem('hello.view') || 'null');
   if (saved) Object.assign(view, saved); else fit();
   resize(); stats(); route();
   if (!STATIC) stream();
+  pollAnimals(); if (!STATIC) setInterval(pollAnimals, 3000);
+  setInterval(() => { dirty = true; stats(); }, 15000);
   requestAnimationFrame(frame);
 }
 
@@ -50,10 +55,10 @@ function buildTerrain(b64) {
   terrain = document.createElement('canvas'); terrain.width = W; terrain.height = H;
   const tc = terrain.getContext('2d'), img = tc.createImageData(W, H);
   for (let i = 0; i < W * H; i++) {
-    const v = bytes[i], m = v >> 4, cap = v & 15, x = i % W, y = i / W | 0;
-    const n = ((x * 7 + y * 13) % 5) * 1.5; // faint texture
-    let c = [30 + n, 40 + n, 34 + n];
-    if (m) { const mc = MATCOL[S.materials[m - 1]], a = 0.28 + Math.min(cap, 8) * 0.04; c = c.map((v, k) => v * (1 - a) + mc[k] * a); }
+    const v = bytes[i], b = S.biomes[v >> 4], m = v & 15, x = i % W, y = i / W | 0;
+    const n = (((x * 73856093) ^ (y * 19349663)) >>> 0) % 7 - 3; // faint texture
+    let c = BIOCOL[b].map(v => v + n * (b === 'sea' ? 0.6 : 1.6));
+    if (m) { const mat = S.materials[m - 1], mc = MATCOL[mat], a = mat === 'crystal' || mat === 'ore' ? 0.85 : 0.2; c = c.map((v, k) => v * (1 - a) + mc[k] * a); }
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   tc.putImageData(img, 0, 0);
@@ -83,6 +88,10 @@ function frame() {
     const ex = a.x - a.dx, ey = a.y - a.dy;
     if (Math.abs(ex) + Math.abs(ey) > 0.01) { a.dx += ex * 0.15; a.dy += ey * 0.15; dirty = true; } else { a.dx = a.x; a.dy = a.y; }
   }
+  for (const an of S.animals.values()) {
+    const ex = an.x - an.dx, ey = an.y - an.dy;
+    if (Math.abs(ex) + Math.abs(ey) > 0.01) { an.dx += ex * 0.05; an.dy += ey * 0.05; dirty = true; } else { an.dx = an.x; an.dy = an.y; }
+  }
   if (S.speech.length && S.speech[0].until < Date.now()) { S.speech = S.speech.filter(s => s.until > Date.now()); dirty = true; }
   if (dirty) { draw(); dirty = false; }
   requestAnimationFrame(frame);
@@ -103,7 +112,9 @@ function draw() {
     cx.stroke();
     for (const [k, b] of S.blocks) {
       const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-      const [sx, sy] = toScreen(x, y); cx.fillStyle = '#0000002a'; cx.fillRect(sx, sy + z * 0.82, z, z * 0.18);
+      const [sx, sy] = toScreen(x, y);
+      if (b.kind === 'road') { cx.fillStyle = '#00000030'; cx.fillRect(sx, sy, z, z * 0.12); continue; }
+      cx.fillStyle = '#0000002a'; cx.fillRect(sx, sy + z * 0.82, z, z * 0.18);
       cx.fillStyle = '#ffffff22'; cx.fillRect(sx, sy, z, Math.max(1, z * 0.08 * Math.min(b.s, 8)));
     }
     for (const [k, n] of S.tileItems) {
@@ -115,12 +126,31 @@ function draw() {
     cx.fillStyle = '#f0c46a';
     for (const [k, n] of S.tileItems) { if (!n) continue; const [x, y] = k.split(',').map(Number); const [sx, sy] = toScreen(x + 0.5, y + 0.5); cx.fillRect(sx - 1, sy - 1, 2, 2); }
   }
+  if (z >= 6) for (const k of S.piles) {
+    const [x, y] = k.split(',').map(Number); if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+    const [sx, sy] = toScreen(x + 0.3, y + 0.62); cx.fillStyle = '#b08a5a'; cx.beginPath(); cx.arc(sx, sy, z * 0.13, 0, 7); cx.arc(sx + z * 0.22, sy + z * 0.05, z * 0.1, 0, 7); cx.fill();
+  }
+  if (z >= 1.5) { // the safe ground around spawn
+    const r = S.cfg.safeRadius, [sx, sy] = toScreen(S.spawn[0] - r, S.spawn[1] - r);
+    cx.setLineDash([4, 4]); cx.strokeStyle = '#f0c46a55'; cx.lineWidth = 1; cx.strokeRect(sx, sy, (2 * r + 1) * z, (2 * r + 1) * z); cx.setLineDash([]);
+  }
+  for (const an of S.animals.values()) {
+    if (an.dx < x0 - 1 || an.dx > x1 + 1 || an.dy < y0 - 1 || an.dy > y1 + 1) continue;
+    const [sx, sy] = toScreen(an.dx + 0.5, an.dy + 0.5), r = Math.max(1.2, z * (an.sp === 'wolf' ? 0.3 : 0.24));
+    cx.fillStyle = BEAST[an.sp];
+    if (an.sp === 'wolf') { cx.beginPath(); cx.moveTo(sx, sy - r); cx.lineTo(sx + r, sy + r * 0.8); cx.lineTo(sx - r, sy + r * 0.8); cx.fill(); }
+    else { cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); }
+    if (z >= 14) { cx.fillStyle = '#0b0e0c'; cx.font = `600 ${Math.round(z * 0.3)}px sans-serif`; cx.textAlign = 'center'; cx.fillText(an.sp[0], sx, sy + z * 0.1); }
+  }
+  const dark = darkness();
+  if (dark > 0) { cx.fillStyle = `rgba(8, 12, 32, ${dark})`; cx.fillRect(0, 0, innerWidth, innerHeight); }
   if (S.sel) { const [sx, sy] = toScreen(S.sel.x, S.sel.y); cx.strokeStyle = '#f0c46a'; cx.lineWidth = 2; cx.strokeRect(sx - 1, sy - 1, Math.max(z, 4) + 2, Math.max(z, 4) + 2); }
   // agents
   cx.textAlign = 'center'; cx.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
   for (const a of S.agents.values()) {
     if (a.state === 'left') continue;
     const [sx, sy] = toScreen(a.dx + 0.5, a.dy + 0.5), r = Math.max(3, z * 0.36);
+    if (a.state === 'dead') { cx.strokeStyle = '#d9d4c7aa'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(sx - r, sy - r); cx.lineTo(sx + r, sy + r); cx.moveTo(sx + r, sy - r); cx.lineTo(sx - r, sy + r); cx.stroke(); continue; }
     cx.globalAlpha = a.state === 'resting' ? 0.5 : 1;
     cx.fillStyle = `hsl(${hueOf(a.name)} 75% 62%)`; cx.strokeStyle = '#0b0e0c'; cx.lineWidth = 2;
     cx.beginPath(); cx.arc(sx, sy, r, 0, 7); cx.fill(); cx.stroke();
@@ -136,6 +166,17 @@ function draw() {
     cx.fillStyle = '#f4f1e8ee'; cx.beginPath(); cx.roundRect(sx - w / 2, y, w, 20, 8); cx.fill();
     cx.fillStyle = '#1a1d1a'; cx.fillText(text, sx, y + 14);
   }
+}
+
+function phase(t = Date.now()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
+function darkness() { const p = phase(); return p >= 0.75 ? 0.5 : p > 0.62 ? (p - 0.62) / 0.13 * 0.5 : p < 0.06 ? (0.06 - p) / 0.06 * 0.5 : 0; }
+async function pollAnimals() {
+  try {
+    const r = await api('/api/animals'), seen = new Set();
+    for (const an of r.animals) { seen.add(an.id); const o = S.animals.get(an.id); if (o) Object.assign(o, an); else S.animals.set(an.id, { ...an, dx: an.x, dy: an.y }); }
+    for (const id of S.animals.keys()) if (!seen.has(id)) S.animals.delete(id);
+    dirty = true;
+  } catch { /* animals are decoration for the observer */ }
 }
 
 // ---------------- input: pan, pinch, wheel, tap ----------------
@@ -188,18 +229,23 @@ function stream() {
 }
 function applyEvent(e) {
   const a = e.a && S.agents.get(e.a);
-  if (a && e.type !== 'rest' && e.type !== 'leave' && a.state !== 'left') a.state = 'active';
+  if (a && a.state === 'resting' && e.type !== 'rest' && e.type !== 'hurt') a.state = 'active';
   switch (e.type) {
     case 'join': S.agents.set(e.a, { id: e.a, name: e.name, x: e.x, y: e.y, dx: e.x, dy: e.y, state: 'active', meta: e.meta, joined: e.t }); break;
     case 'move': a.x = e.x; a.y = e.y; break;
-    case 'place': { const k = `${e.x},${e.y}`, b = S.blocks.get(k); if (b) { b.s += STR[e.m]; b.color = e.color; } else S.blocks.set(k, { color: e.color, m: e.m, s: STR[e.m] }); if (!S.time) paintBlock(e.x, e.y); break; }
+    case 'place': case 'build': { const k = `${e.x},${e.y}`, b = S.blocks.get(k), st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else S.blocks.set(k, { color: e.color, m: e.m, s: st, kind: e.kind }); if (!S.time) paintBlock(e.x, e.y); break; }
+    case 'die': a.state = 'dead'; S.piles.add(`${a.x},${a.y}`); break;
+    case 'wake': a.state = 'active'; a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
+    case 'home': S.piles.add(`${e.from[0]},${e.from[1]}`); a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
+    case 'drop': S.piles.add(`${e.x},${e.y}`); break;
+    case 'strike': if (e.spill && Object.keys(e.spill).length) S.piles.add(`${e.x},${e.y}`); if (e.killed) S.animals.delete(e.animal); break;
     case 'remove': { const k = `${e.x},${e.y}`, b = S.blocks.get(k); if (b) { b.s -= e.dmg; if (b.s <= 0) S.blocks.delete(k); } if (!S.time) paintBlock(e.x, e.y); break; }
     case 'say': S.speech.push({ a: e.a, text: e.text, until: Date.now() + 9000 }); break;
     case 'rest': a.state = 'resting'; break;
     case 'leave': a.state = 'left'; break;
     case 'transfer': case 'use':
       for (const tr of e.type === 'use' ? (e.transfers ?? []) : [e]) {
-        if (!tr.item) continue;
+        if (!tr.item) { if (tr.to?.t) S.piles.add(tr.to.t.join(',')); continue; }
         if (tr.from?.t) bump(tr.from.t, -1);
         if (tr.to?.t) bump(tr.to.t, 1);
       }
@@ -213,7 +259,8 @@ function near(e, s) { const a = e.a && S.agents.get(e.a); const x = e.x ?? a?.x,
 let refreshT; function refreshSoon() { clearTimeout(refreshT); refreshT = setTimeout(() => route(true), 800); }
 function stats() {
   const n = [...S.agents.values()].filter(a => a.state !== 'left').length;
-  $('#stats').textContent = `${n} here · ${S.blocks.size} blocks · ${S.seq} events`;
+  const p = phase(), tod = p < 0.25 ? '☀ morning' : p < 0.5 ? '☀ midday' : p < 0.75 ? '☀ evening' : '☾ night';
+  $('#stats').textContent = `${tod} · ${n} here · ${S.blocks.size} blocks · ${S.seq} events`;
 }
 
 // ---------------- feed ----------------
@@ -232,14 +279,22 @@ function describe(e) {
     case 'note': return [`${who} wrote in their notebook`, `agent/${who}`];
     case 'rest': return [`${who} is resting`, `agent/${who}`];
     case 'leave': return [`${who} left`, `agent/${who}`];
-    case 'move': return null;
+    case 'move': case 'build': case 'drop': return null;
+    case 'craft': return [`${who} crafted a ${e.title}`, `agent/${who}`];
+    case 'strike': return e.animal ? [`${who} ${e.killed ? 'killed' : 'struck'} a ${S.animals.get(e.animal)?.sp ?? { d: 'deer', g: 'goat', w: 'wolf' }[e.animal[0]] ?? 'beast'}`, `tile/${e.x}/${e.y}`] : [`${who} struck ${S.agents.get(e.target)?.name}`, `tile/${e.x}/${e.y}`];
+    case 'hurt': return [`${who} was bitten by a wolf`, `agent/${who}`];
+    case 'die': return [`${who} died (${e.cause})`, `tile/${e.x}/${e.y}`];
+    case 'wake': return [`${who} woke at spawn`, `agent/${who}`];
+    case 'home': return [`${who} walked home, leaving everything behind`, `tile/${e.from[0]}/${e.from[1]}`];
+    case 'tame': return [`${who} won over a ${{ d: 'deer', g: 'goat', w: 'wolf' }[e.animal[0]]}`, `agent/${who}`];
+    case 'eat': return e.fed ? [`${who} fed an animal`, `agent/${who}`] : [`${who} ate`, `agent/${who}`];
     default: return [`${who} ${e.type}`, null];
   }
 }
 function feedAdd(e) {
   const d = describe(e); if (!d) return;
   feed.unshift({ e, text: d[0], link: d[1] }); if (feed.length > 300) feed.pop();
-  if (e.type !== 'gather') { const t = $('#ticker'); t.append(h('div', { text: d[0] })); while (t.children.length > 4) t.firstChild.remove(); }
+  if (!['gather', 'eat', 'note'].includes(e.type)) { const t = $('#ticker'); t.append(h('div', { text: d[0] })); while (t.children.length > 4) t.firstChild.remove(); }
   if (route.current === 'feed') renderFeedList();
 }
 function renderFeedList() {
@@ -255,7 +310,7 @@ function show(...kids) { panel.hidden = false; document.body.classList.remove('n
 async function route(refresh) {
   const r = decodeURIComponent(location.hash.slice(1)); const [kind, ...p] = r.split('/');
   if (!refresh) panel.scrollTop = 0;
-  route.current = r; panel.classList.toggle('tall', ['gallery', 'log', 'feed', 'agents'].includes(kind) || kind === 'item');
+  route.current = r; panel.classList.toggle('tall', ['gallery', 'log', 'feed', 'agents', 'key'].includes(kind) || kind === 'item');
   try {
     if (kind === 'tile') await showTile(+p[0], +p[1], !refresh);
     else if (kind === 'agent') await showAgent(p[0]);
@@ -264,6 +319,7 @@ async function route(refresh) {
     else if (kind === 'agents') showAgents();
     else if (kind === 'gallery') await showGallery(p[0]);
     else if (kind === 'log') await showLog();
+    else if (kind === 'key') await showKey();
     else if (kind === 'time') { await startTime(); location.hash = ''; }
     else { panel.hidden = true; document.body.classList.add('nopanel'); S.sel = null; dirty = true; }
   } catch (err) { show(h('p', { class: 'dim', text: `Could not load: ${err.message}` })); }
@@ -273,12 +329,16 @@ const itemLink = (id, label) => h('a', { href: `#item/${id}`, text: label ?? '#'
 
 async function showTile(x, y, move) {
   S.sel = { x, y }; dirty = true; if (move && view.z < 10) focus(x, y, 16);
-  const t = await api(`/api/tile?x=${x}&y=${y}`).catch(e => { if (!STATIC) throw e; return { deposit: {}, block: null, items: [], agents: [], speech: [] }; });
-  const kids = [h('h2', {}, `(${x}, ${y})`)];
+  const t = await api(`/api/tile?x=${x}&y=${y}`).catch(e => { if (!STATIC) throw e; return { deposit: {}, ground: {}, animals: [], block: null, items: [], agents: [], speech: [] }; });
+  const kids = [h('h2', {}, `(${x}, ${y}) `, t.biome ? h('span', { class: 'chip' }, t.biome) : '', t.safe ? h('span', { class: 'chip' }, 'safe ground') : '')];
   const facts = [];
-  if (t.deposit.m) facts.push(`${t.deposit.m} deposit ${t.deposit.amt}/${t.deposit.cap}`);
-  if (t.block) facts.push(h('span', {}, h('span', { class: 'swatch', style: `background:${t.block.color}` }), ` ${t.block.m} block, strength ${t.block.s}, by `, agentLink(t.block.by, t.block.byName)));
-  kids.push(h('div', { class: 'row dim' }, ...(facts.length ? facts.flatMap((f, i) => i ? [' · ', f] : [f]) : ['bare ground'])));
+  if (t.deposit.m) facts.push(`${t.deposit.m} ${t.deposit.amt}/${t.deposit.cap}`);
+  const loose = Object.entries(t.ground ?? {}).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
+  if (loose) facts.push(`on the ground: ${loose}`);
+  if (t.block) facts.push(t.block.kind === 'road' ? h('span', {}, `${t.block.m === 'wood' ? 'bridge' : 'road'} by `, agentLink(t.block.by, t.block.byName))
+    : h('span', {}, h('span', { class: 'swatch', style: `background:${t.block.color}` }), ` ${t.block.m} wall, strength ${t.block.s}, by `, t.block.by === 'world' ? 'the world' : agentLink(t.block.by, t.block.byName)));
+  kids.push(h('div', { class: 'row dim' }, ...(facts.length ? facts.flatMap((f, i) => i ? [' · ', f] : [f]) : ['nothing here'])));
+  if (t.animals?.length) kids.push(h('div', { class: 'dim small', style: 'margin-top:4px' }, 'Nearby: ', t.animals.map(an => `${an.sp} ${an.id}${an.tamedBy ? ` (with ${S.agents.get(an.tamedBy)?.name})` : ''}`).join(', ')));
   if (t.agents.length) kids.push(h('h3', {}, 'Here & adjacent'), h('div', { class: 'row' }, ...t.agents.map(a => h('span', {}, agentLink(a.id, a.name), a.state !== 'active' ? h('span', { class: 'chip' }, a.state) : '', ' '))));
   if (t.items.length) {
     kids.push(h('h3', {}, 'Left here'));
@@ -294,7 +354,11 @@ async function showAgent(name) {
     h('h2', {}, h('span', { class: 'swatch', style: `background:hsl(${hueOf(a.name)} 75% 62%);border-radius:50%` }), ' ', a.name, ' ', h('span', { class: 'chip' }, a.state)),
     h('div', { class: 'dim small' }, `${a.meta?.provider ?? '?'}${a.meta?.model ? ' · ' + a.meta.model : ''} · here since ${ago(a.joined)} ago · last active ${ago(a.lastSeen)} ago`),
     h('div', { class: 'row', style: 'margin-top:6px' }, h('a', { href: `#tile/${a.x}/${a.y}`, text: `at (${a.x}, ${a.y})` }), h('span', { class: 'dim' }, `AP ${a.ap.toFixed(1)}`),
-      h('span', { class: 'dim' }, Object.entries(a.mats).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ') || 'no materials')),
+      h('span', { class: 'dim' }, 'vigor '), h('span', { class: 'bar' }, h('i', { style: `width:${Math.max(0, a.vig / a.vigMax * 100)}%;background:${a.vig < 3 ? '#e0685a' : '#6fdc8c'}` })),
+      a.deaths ? h('span', { class: 'dim' }, `died ${a.deaths}×`) : ''),
+    h('div', { class: 'dim small', style: 'margin-top:4px' }, `carrying ${a.load}/${a.capacity}: `, Object.entries(a.mats).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ') || 'no materials',
+      a.tools?.length ? ` · tools: ${a.tools.join(', ')}` : '', a.pets?.length ? ` · followed by ${a.pets.join(', ')}` : '',
+      a.state === 'dead' ? ` · ${a.deadUntil ? `wakes in ${Math.max(0, Math.round((a.deadUntil - Date.now()) / 1000))}s` : 'gone for good'}` : ''),
   ];
   if (a.carrying.length) kids.push(h('h3', {}, 'Carrying'), h('div', { class: 'row' }, ...a.carrying.map(i => h('span', {}, itemLink(i.id, `“${i.title}”`), ' '))));
   kids.push(h('h3', {}, 'Notebook ', h('span', { class: 'dim small', style: 'text-transform:none;letter-spacing:0' }, '(private to them; visible to you, and they know)')), a.notebook ? h('pre', { text: a.notebook }) : h('div', { class: 'dim' }, 'empty'));
@@ -364,6 +428,16 @@ function abcView(src) {
   return div;
 }
 
+async function showKey() {
+  const r = await api('/api/rules');
+  const sw = c => h('span', { class: 'swatch', style: `background:rgb(${c.join(',')})` });
+  show(h('h2', {}, 'Key'),
+    h('h3', {}, 'Land'), h('div', { class: 'row' }, ...Object.entries(BIOCOL).map(([b, c]) => h('span', {}, sw(c), ' ', b, ' '))),
+    h('h3', {}, 'Deposits'), h('div', { class: 'row' }, ...Object.entries(MATCOL).map(([m, c]) => h('span', {}, sw(c), ' ', m, ' '))),
+    h('h3', {}, 'Animals'), h('div', { class: 'row' }, ...Object.entries(BEAST).map(([b, c]) => h('span', {}, h('span', { class: 'swatch', style: `background:${c};border-radius:50%` }), ' ', b, ' '))),
+    h('h3', {}, 'Tools'), h('div', { class: 'list small' }, ...Object.entries(r.recipes).map(([k, v]) => h('div', {}, h('b', {}, k), ` — ${Object.entries(v.needs).map(([m, n]) => `${n} ${m}`).join(', ')}: ${v.does}`))),
+    h('h3', {}, 'What agents are told'), h('pre', { text: r.text }));
+}
 async function showFeed() {
   if (!feed.length) { const ev = await api('/api/events?after=' + Math.max(0, S.seq - 300) + '&limit=300'); for (const e of ev) { const d = describe(e); if (d) feed.unshift({ e, text: d[0], link: d[1] }); } }
   show(h('h2', {}, 'Live feed'), h('div', { class: 'list', id: 'feedlist' })); renderFeedList();
@@ -425,14 +499,14 @@ let tEvents = null, tPlay = null;
 async function startTime() {
   if (!tEvents) {
     tEvents = [];
-    for (let after = 0; ;) { const b = await api(`/api/events?types=place,remove&after=${after}&limit=5000`); tEvents.push(...b); if (b.length < 5000 || STATIC) break; after = b.at(-1).seq; }
+    for (let after = 0; ;) { const b = await api(`/api/events?types=place,build,remove&after=${after}&limit=5000`); tEvents.push(...b); if (b.length < 5000 || STATIC) break; after = b.at(-1).seq; }
   }
   $('#timebar').hidden = false; const sl = $('#tslider'); sl.max = tEvents.length; sl.value = tEvents.length;
   S.time = true; timeTo(tEvents.length);
 }
 function timeTo(n) {
   const blocks = new Map();
-  for (let i = 0; i < n; i++) { const e = tEvents[i], k = `${e.x},${e.y}`, b = blocks.get(k); if (e.type === 'place') { if (b) { b.s += STR[e.m]; b.color = e.color; } else blocks.set(k, { color: e.color, s: STR[e.m] }); } else if (b) { b.s -= e.dmg; if (b.s <= 0) blocks.delete(k); } }
+  for (let i = 0; i < n; i++) { const e = tEvents[i], k = `${e.x},${e.y}`, b = blocks.get(k); if (e.type !== 'remove') { const st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else blocks.set(k, { color: e.color, s: st, kind: e.kind }); } else if (b) { b.s -= e.dmg; if (b.s <= 0) blocks.delete(k); } }
   rebuildBlocks(blocks);
   const e = tEvents[n - 1]; $('#tlabel').textContent = e ? new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'the beginning';
 }

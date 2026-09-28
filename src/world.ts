@@ -487,7 +487,7 @@ export const VERBS: Record<string, Verb> = {
       if (cx === a.x && cy === a.y) return { ok: false, text: why || 'You did not move.' };
       w.emit('move', a.id, { x: cx, y: cy, cost, dv: dv ? -+dv.toFixed(2) : undefined });
       const b = w.geo.biomeAt(cx, cy);
-      let text = `You walk to ${w.has(a, 'compass') ? `(${cx},${cy})` : 'a new spot'} in ${BIOME_INFO[b].words}. Spent ${cost} AP${dv ? `; the ${isWater(b) ? 'water' : 'weather'} cost you ${dv.toFixed(1)} vigor (now ${w.vigOf(a).toFixed(1)})` : ''}${notes.length ? `; ${[...new Set(notes)].join(', ')}` : ''}.`;
+      let text = `You walk to ${w.has(a, 'compass') ? `(${cx},${cy})` : 'a new spot'} in ${BIOME_INFO[b].words}. Spent ${cost} AP${dv ? `; the way cost you ${dv.toFixed(1)} vigor (now ${w.vigOf(a).toFixed(1)})` : ''}${notes.length ? `; ${[...new Set(notes)].join(', ')}` : ''}.`;
       if (w.vigOf(a) <= 0) { w.kill(a, `exposure in ${BIOME_INFO[b].words}`); text += ' You collapse and die.'; }
       else if (why) text += ' ' + why;
       return { ok: true, text };
