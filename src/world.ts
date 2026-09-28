@@ -104,6 +104,7 @@ const DIRS: Record<string, [number, number]> = {
 };
 const LETTER: Record<Material, string> = { stone: 'S', wood: 'W', clay: 'C', sand: 'N', fiber: 'F', food: 'B', ore: 'O', crystal: 'X', marble: 'M', ochre: 'R', indigo: 'I', shell: 'H', amber: 'Y' };
 export const key = (x: number, y: number) => `${x},${y}`;
+const ALIAS: Record<string, string> = { berries: 'food', berry: 'food', fish: 'food', meat: 'food', logs: 'wood', log: 'wood', timber: 'wood', rock: 'stone', rocks: 'stone', pebbles: 'stone', mud: 'clay', grass: 'fiber', reeds: 'fiber', iron: 'ore', gems: 'crystal', gem: 'crystal', dye: 'ochre', shells: 'shell' };
 const locKey = (l: Loc) => 'a' in l ? `a:${l.a}` : 'o' in l ? `o:${l.o}` : `t:${l.t[0]},${l.t[1]}`;
 const clampStr = (s: unknown, n: number) => String(s ?? '').slice(0, n);
 const sha = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
@@ -385,6 +386,8 @@ export class World {
   // ---------- verbs ----------
   act(a: Agent, verb: string, args: any = {}): Result {
     const f = (VERBS as any)[verb];
+    // say what you mean: common names for materials are understood
+    if (args && typeof args === 'object') for (const k of ['material', 'item']) { const v = args[k]; if (typeof v === 'string' && ALIAS[v.toLowerCase()]) args = { ...args, [k]: ALIAS[v.toLowerCase()] }; }
     if (!f) return { ok: false, text: `Unknown verb "${verb}". Verbs: ${Object.keys(VERBS).join(', ')}.` };
     try {
       const ghostly = ['look', 'note', 'rest', 'inspect'].includes(verb); // what the dead can still do
@@ -441,6 +444,15 @@ export class World {
     if (!mine && this.dist(a.x, a.y, p[0], p[1]) > r) throw new Error(`#${it.id} is out of reach.`);
   }
   room(a: Agent) { return Math.max(0, this.capacity(a) - this.load(a)); }
+  // The closest deposit of a material this body can see, as a hint in the words of its own perception.
+  nearestSeen(a: Agent, m?: string) {
+    const r = this.sight(a); let best: [number, number] | null = null, bd = Infinity;
+    for (let y = a.y - r; y <= a.y + r; y++) for (let x = a.x - r; x <= a.x + r; x++) {
+      if (x === a.x && y === a.y) continue; const d = this.depositAt(x, y);
+      if (!d.m || d.amt <= 0 || (m && d.m !== m)) continue; const dd = this.dist(a.x, a.y, x, y); if (dd < bd) { bd = dd; best = [x, y]; }
+    }
+    return best ? ` The nearest ${m ?? 'deposit'} you can see is ${rel(a, best[0], best[1])}.` : m ? ` You can't see any ${m} from here.` : '';
+  }
 
   placeBlock(a: Agent, type: string, dyeArg: unknown, tx: number, ty: number): Result {
     const bt = BLOCKS[String(type ?? '')];
@@ -602,8 +614,8 @@ export const VERBS: Record<string, Verb> = {
         w.need(a, 3); w.emit('gather', a.id, { x: a.x, y: a.y, m: 'food', n: 1, fish: true, cost: 3 });
         return { ok: true, text: 'You caught a fish (1 food).' };
       }
-      if (want && d.m !== want) throw new Error(`There is no ${want} here${d.m ? ` (only ${d.m})` : ''}. You can only gather from the tile you stand on.`);
-      if (!d.m || d.amt <= 0) throw new Error(d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather on this tile. Deposits show on the map as capital letters.');
+      if (want && d.m !== want) throw new Error(`There is no ${want} here${d.m ? ` (only ${d.m})` : ''}. You can only gather from the tile you stand on.${w.nearestSeen(a, want)}`);
+      if (!d.m || d.amt <= 0) throw new Error((d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather on this tile. Deposits show on the map as capital letters.') + w.nearestSeen(a, d.m ?? undefined));
       const pick = w.has(a, 'pick');
       if ((d.m === 'ore' || d.m === 'crystal') && !pick) throw new Error(`There is ${d.m} here, but you need a pick to get it out.`);
       const n = Math.max(1, Math.min(pick ? 5 : 3, Math.trunc(x.n ?? 1), d.amt, room));
@@ -913,7 +925,7 @@ export function observe(w: World, a: Agent, detail = 1): string {
       }
       rows.push(row);
     }
-    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, = floor/road, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water; deposits S stone W wood C clay N sand F fiber B berries O ore X crystal M marble R ochre I indigo H shell Y amber):`);
+    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, = floor/road, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water; deposits S stone W wood C clay N sand F fiber B berries (food) O ore X crystal M marble R ochre I indigo H shell Y amber):`);
     out.push(rows.join('\n'));
     if (legend.size) out.push(`Key: ${[...legend].map(([n, d]) => `${d}=${n}`).join(' ')}`);
   }

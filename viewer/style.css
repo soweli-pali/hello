@@ -94,3 +94,7 @@ svg.lineage text { fill: var(--fg); font-size: 10px; }
 .bar i { display: block; height: 100%; }
 
 .card:hover { border-color: #3b4a40; transform: translateY(-1px); text-decoration: none; }
+
+.blocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.blk { display: flex; gap: 8px; align-items: center; }
+canvas.tex { width: 32px; height: 32px; border-radius: 4px; image-rendering: pixelated; box-shadow: 0 0 0 1px #0006; flex: none; }

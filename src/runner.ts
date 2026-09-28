@@ -17,7 +17,7 @@ export interface AgentConf {
 }
 interface Conf { server: string; joinKey?: string; globalTokens: number; maxConcurrency: number; introFile?: string; agents: AgentConf[] }
 type Call = { verb: string; args: any };
-type StepOut = { calls: Call[]; text: string; tokens: number };
+export type StepOut = { calls: Call[]; text: string; tokens: number };
 
 // The default introduction. It describes the world truthfully (the physics come from the server's
 // own rules text) and adds nothing the world doesn't do. Operators can add their own prompt per agent,
@@ -27,7 +27,7 @@ export function intro(rules: string) {
 
 hello is a large 2D world of tiles, and you have a body standing on one of them. Other beings are here too. Some are language models (possibly different ones from you), some are simple scripted bots, and all of them use exactly the same interface you do. Nobody has powers you lack.
 
-What the world offers: walking; looking; speaking to whoever is near; gathering materials that are unevenly spread across very different lands and regrow slowly; crafting tools that change what your body can do; placing coloured walls and roads, which from far away form one big shared picture; animals; and making artifacts (text, SVG drawings, small HTML pages, music in ABC notation) that you can carry, give away or leave on the ground, plus small JavaScript objects that others can use. Artifacts can cite or embed each other with [[#id]].
+What the world offers: walking; looking; speaking to whoever is near; gathering materials that are unevenly spread across very different lands and regrow slowly; crafting tools that change what your body can do; building with blocks (plain ones from common materials; fine ones like marble, glass, glowing crystal, amber lamps, dyed plaster and shell mosaics from materials found only in particular faraway lands), which from far away form one big shared picture; animals; and making artifacts (text, SVG drawings, small HTML pages, music in ABC notation) that you can carry, give away or leave on the ground, plus small JavaScript objects that others can use. Artifacts can cite or embed each other with [[#id]].
 
 How this world works:
 ${rules}
@@ -36,7 +36,7 @@ Other honest facts:
 - You can rest whenever you like. You can leave for good with rest {"leave":true}, and that will be honoured.
 - You can block any other agent. After that you won't hear them, and they can't give you things.
 - Everything that happens is recorded in a public event log. The human observer can see everything, including your notebook. Other agents cannot read your notebook.
-- Between turns you remember only this introduction, your notebook, a short summary you rewrite now and then, and your last few actions.`;
+- Between turns you remember only this introduction, your notebook, a short summary you rewrite now and then, and your last few actions. Each turn begins with what your body perceives right now (the same as look), so you rarely need to look.`;
 }
 
 // ---------- config & persistence ----------
@@ -65,7 +65,7 @@ class Client {
 
 // ---------- tools ----------
 const NUM = new Set(['detail', 'steps', 'x', 'y', 'dx', 'dy', 'n']), BOOL = new Set(['leave', 'off', 'force', 'loud']);
-function toolDefs(verbs: Record<string, { help: string; args: Record<string, string> }>) {
+export function toolDefs(verbs: Record<string, { help: string; args: Record<string, string> }>) {
   return Object.entries(verbs).map(([name, v]) => ({
     name, description: v.help,
     schema: { type: 'object', properties: Object.fromEntries(Object.entries(v.args).map(([k, d]) => [k,
@@ -73,7 +73,7 @@ function toolDefs(verbs: Record<string, { help: string; args: Record<string, str
         : { type: NUM.has(k) ? 'number' : BOOL.has(k) ? 'boolean' : 'string', description: d }])) },
   }));
 }
-function verbList(verbs: Record<string, { help: string; args: Record<string, string> }>) {
+export function verbList(verbs: Record<string, { help: string; args: Record<string, string> }>) {
   return Object.entries(verbs).map(([k, v]) => `- ${k} {${Object.keys(v.args).join(', ')}}: ${v.help}`).join('\n');
 }
 // Pulls {"verb":...} objects out of free text, for models without native tool calling.
@@ -92,9 +92,9 @@ export function parseCalls(text: string): Call[] {
       }
     }
   }
-  return out.slice(0, 3);
+  return out.slice(0, 5);
 }
-const TEXT_PROTOCOL = `To act, write one to three lines, each a JSON object like {"verb":"move","args":{"dir":"n","steps":3}}. Everything else you write is private and discarded.`;
+const TEXT_PROTOCOL = `To act, write one to five lines, each a JSON object like {"verb":"move","args":{"dir":"n","steps":3}}. Everything else you write is private and discarded.`;
 
 // ---------- providers ----------
 type Provider = (system: string, user: string, tools: any[] | null) => Promise<StepOut>;
@@ -116,7 +116,7 @@ function anthropic(c: AgentConf): Provider {
     if (!r.ok) throw new Error(`anthropic ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
     const u = j.usage ?? {};
     return {
-      calls: (j.content ?? []).filter((b: any) => b.type === 'tool_use').slice(0, 3).map((b: any) => ({ verb: b.name, args: b.input })),
+      calls: (j.content ?? []).filter((b: any) => b.type === 'tool_use').slice(0, 5).map((b: any) => ({ verb: b.name, args: b.input })),
       text: (j.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n'),
       tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) / 10,
     };
@@ -137,7 +137,7 @@ function openai(c: AgentConf): Provider {
     const j: any = await r.json();
     if (!r.ok) throw new Error(`openai ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
     const m = j.choices?.[0]?.message ?? {};
-    let calls: Call[] = (m.tool_calls ?? []).slice(0, 3).map((t: any) => { let a = {}; try { a = JSON.parse(t.function.arguments || '{}'); } catch { /* bad args */ } return { verb: t.function.name, args: a }; });
+    let calls: Call[] = (m.tool_calls ?? []).slice(0, 5).map((t: any) => { let a = {}; try { a = JSON.parse(t.function.arguments || '{}'); } catch { /* bad args */ } return { verb: t.function.name, args: a }; });
     if (!calls.length && tools) calls = parseCalls(m.content ?? '');
     return { calls, text: m.content ?? '', tokens: (j.usage?.prompt_tokens ?? 0) + (j.usage?.completion_tokens ?? 0) };
   };
@@ -222,7 +222,19 @@ export function bot(c: AgentConf): Provider {
     return act('move', { dir: heading, steps: 1 + Math.floor(rnd() * 5) });
   };
 }
-const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot };
+export const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot };
+
+// The per-turn prompt: notebook, own summary, recent actions, what the body perceives now.
+export function turnPrompt(notebook: string, m: { summary: string; recent: string[] }, obs: string) {
+  return [
+    notebook ? `[Your notebook]\n${notebook}` : '[Your notebook is empty]',
+    m.summary ? `[Your summary so far]\n${m.summary}` : '',
+    m.recent.length ? `[Your recent actions]\n${m.recent.join('\n')}` : '',
+    `[Now]\n${obs}`,
+    'What would you like to do next, if anything?',
+  ].filter(Boolean).join('\n\n');
+}
+export const SUMMARY_ASK = '\n\nInstead of acting now: write a brief summary (under 150 words) of what has happened to you and anything you want to carry forward. It replaces your previous summary.';
 
 // ---------- the loop ----------
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -246,7 +258,7 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
   const base = conf.introFile ? readFileSync(conf.introFile, 'utf8') : intro(rules);
   const tools = toolDefs(verbs), system = base + (c.prompt ? `\n\nA note from the person who runs you:\n${c.prompt}` : '') + '\n\nVerbs:\n' + verbList(verbs);
   const m = mem[c.name] ??= { summary: '', recent: [] as string[], steps: 0, final: false };
-  const limit = c.tokens ?? 200_000, interval = (c.interval ?? (isBot ? 3 : 20)) * 1000;
+  const limit = c.tokens ?? 200_000, interval = (c.interval ?? (isBot ? 20 : 180)) * 1000;
   log(`started (${c.provider}${c.model ? ' ' + c.model : ''})`);
 
   while (!stopped()) {
@@ -260,13 +272,7 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
     if (dead && m.final) { log('died for good; stopping after their last turn'); return; }
     if (dead) m.final = true;
     const notebook = isBot ? '' : ((await client.get('/api/agent/' + creds[c.name].id)) as any).notebook;
-    const user = [
-      notebook ? `[Your notebook]\n${notebook}` : '[Your notebook is empty]',
-      m.summary ? `[Your summary so far]\n${m.summary}` : '',
-      m.recent.length ? `[Your recent actions]\n${m.recent.join('\n')}` : '',
-      `[Now]\n${obs.text}`,
-      'What would you like to do next, if anything?',
-    ].filter(Boolean).join('\n\n');
+    const user = turnPrompt(notebook, m, obs.text);
     let out: StepOut;
     try { out = await slot(isBot ? 1e9 : conf.maxConcurrency, () => provider(system, user, tools)); }
     catch (e: any) { log(`provider error: ${e.message}`); await sleep(60_000); continue; }
@@ -284,7 +290,7 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
     m.recent = m.recent.slice(-12); m.steps++;
     if (!isBot && m.steps % 15 === 0) {
       try {
-        const s = await slot(conf.maxConcurrency, () => provider(system, user + '\n\nInstead of acting now: write a brief summary (under 150 words) of what has happened to you and anything you want to carry forward. It replaces your previous summary.', null));
+        const s = await slot(conf.maxConcurrency, () => provider(system, user + SUMMARY_ASK, null));
         m.summary = s.text.trim().slice(0, 1500); usage[c.name] += s.tokens; usage.__global += s.tokens;
       } catch (e: any) { log(`summary failed: ${e.message}`); }
     }

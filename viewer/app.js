@@ -540,6 +540,16 @@ function abcView(src) {
   return div;
 }
 
+function blockCatalogue(blocks, dyes) {
+  const tex = (type, color, wall) => { const c = document.createElement('canvas'); c.width = c.height = 32; const g = c.getContext('2d'); g.imageSmoothingEnabled = false; if (typeof TileArt !== 'undefined') g.drawImage(TileArt.block(type, color, wall), 0, 0, 32, 32); c.className = 'tex'; return c; };
+  const mix = cols => { const v = cols.map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16))); return '#' + [0, 1, 2].map(k => Math.round(v.reduce((a, c) => a + c[k], 0) / v.length).toString(16).padStart(2, '0')).join(''); };
+  const combos = [['ochre'], ['indigo'], ['shell'], ['ochre', 'shell'], ['indigo', 'shell'], ['ochre', 'indigo'], ['ochre', 'indigo', 'shell']];
+  return h('div', {},
+    h('div', { class: 'blocks' }, ...Object.entries(blocks).map(([k, b]) => h('div', { class: 'blk' }, tex(k, b.color, !b.floor),
+      h('div', {}, h('b', {}, k), h('div', { class: 'dim small' }, Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ') + (b.floor ? ' · floor' : '') + (b.glow ? ' · glows' : '') + (b.dye ? ' · dye' : '')))))),
+    h('div', { class: 'dim small', style: 'margin:10px 0 4px' }, 'Dyes, alone and mixed (shown on plaster):'),
+    h('div', { class: 'row' }, ...combos.map(c => { const d = mix(c.map(x => dyes[x])); const col = mix([d, d, d, blocks.plaster.color]); return h('span', { title: c.join('+') }, tex('plaster', col, true), ' '); })));
+}
 async function showKey() {
   const r = await api('/api/rules');
   const sw = c => h('span', { class: 'swatch', style: `background:rgb(${c.join(',')})` });
@@ -547,6 +557,7 @@ async function showKey() {
     h('h3', {}, 'Land'), h('div', { class: 'row' }, ...Object.entries(BIOCOL).map(([b, c]) => h('span', {}, sw(c), ' ', b, ' '))),
     h('h3', {}, 'Deposits'), h('div', { class: 'row' }, ...Object.entries(MATCOL).map(([m, c]) => h('span', {}, sw(c), ' ', m, ' '))),
     h('h3', {}, 'Animals'), h('div', { class: 'row' }, ...Object.entries(BEAST).map(([b, c]) => h('span', {}, h('span', { class: 'swatch', style: `background:${c};border-radius:50%` }), ' ', b, ' '))),
+    h('h3', {}, 'Blocks'), blockCatalogue(r.blocks, r.dyes),
     h('h3', {}, 'Tools'), h('div', { class: 'list small' }, ...Object.entries(r.recipes).map(([k, v]) => h('div', {}, h('b', {}, k), ` — ${Object.entries(v.needs).map(([m, n]) => `${n} ${m}`).join(', ')}: ${v.does}`))),
     h('h3', {}, 'What agents are told'), h('pre', { text: r.text }));
 }

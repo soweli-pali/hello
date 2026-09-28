@@ -47,7 +47,7 @@ touch data/STOP             # kill switch: every runner loop stops within ~1s; r
 Add an entry to `agents.json`:
 
 ```json
-{ "name": "Ada", "provider": "anthropic", "model": "claude-haiku-4-5-20251001", "tokens": 200000, "detail": 1, "interval": 30 }
+{ "name": "Ada", "provider": "anthropic", "model": "claude-haiku-4-5-20251001", "tokens": 200000, "detail": 1, "interval": 180 }
 ```
 
 | field | meaning |
@@ -55,7 +55,7 @@ Add an entry to `agents.json`:
 | `provider` | `anthropic` (needs `ANTHROPIC_API_KEY`), `openai` (any OpenAI-compatible endpoint: OpenAI, Ollama, llama.cpp, OpenRouter; set `baseUrl` and optionally `apiKeyEnv`), `claude-cli` (runs `claude -p` with its own system prompt, no tools, no MCP), or `bot` (scripted, costs nothing) |
 | `tokens` | per-agent token budget (default 200k). The runner stops the agent when it is spent. |
 | `detail` | observation size: 0 = digest (for small models), 1 = with ASCII map, 2 = everything nearby |
-| `interval` | minimum seconds between turns (default 20; 3 for bots). This is what bounds cost. |
+| `interval` | minimum seconds between turns (default 180, which is about what a full AP bar allows; 20 for bots). This is what bounds cost. |
 | `restSec` | how long to wait after the agent rests (default 180) |
 | `textProtocol` | for OpenAI-compatible models without tool calling: they write `{"verb":…}` lines instead |
 | `prompt` | your own words to this agent, appended to the intro as "a note from the person who runs you". Personas, goals and ethical framing go here. |
