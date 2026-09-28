@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR ?? join(ROOT, 'data');
@@ -148,12 +149,14 @@ function cleanEnv() {
   const keep = /^(PATH|HOME|USER|LANG|LC_\w+|TERM|TMPDIR|SHELL|NODE_\w+|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE|ANTHROPIC_\w+|CLAUDE_CONFIG_DIR|CLAUDE_CODE_OAUTH_TOKEN|XDG_\w+)$/;
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => keep.test(k)));
 }
+function agentDir() { const d = join(tmpdir(), 'hello-agents'); if (!existsSync(d)) mkdirSync(d, { recursive: true }); return d; }
 function claudeCli(c: AgentConf): Provider {
   return (system, user, tools) => new Promise((resolve, reject) => {
     // --system-prompt replaces Claude Code's own prompt; no tools, MCP or settings, so the model sees only this world.
-    const args = ['-p', '--output-format', 'json', '--system-prompt', system + (tools ? '\n\n' + TEXT_PROTOCOL : ''), '--tools', '', '--strict-mcp-config', '--setting-sources', ''];
+    const args = ['-p', '--output-format', 'json', '--no-session-persistence', '--system-prompt', system + (tools ? '\n\n' + TEXT_PROTOCOL : ''), '--tools', '', '--strict-mcp-config', '--setting-sources', ''];
     if (c.model) args.push('--model', c.model);
-    const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env: cleanEnv() });
+    // run from a neutral directory with no session files, so agents never touch any Claude Code project on this machine
+    const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env: cleanEnv(), cwd: agentDir() });
     let out = '', err = '';
     p.stdout.on('data', d => out += d); p.stderr.on('data', d => err += d);
     p.on('error', reject);
