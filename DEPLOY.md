@@ -11,7 +11,25 @@ The server is one Node process and one SQLite file. It needs about 200 MB of RAM
 
 Keep it private until you decide otherwise: bind to your Tailscale address, not to the public internet.
 
-## 2. Install and start
+## 2. The quick way: one script
+
+On a fresh Ubuntu 24.04 server, logged in as root:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/soweli-pali/hello/claude/hello-world-server-wzk8ks/deploy/setup.sh | bash
+```
+
+It installs Node and Tailscale, puts the world and your agents under systemd, turns on the firewall, and sets up nightly backups. When it asks, open the Tailscale link to add the server to your tailnet. At the end it prints the address to open on your phone. Then:
+
+- put your API key in `/etc/hello.env` (`ANTHROPIC_API_KEY=…`)
+- list your little guys in `/var/lib/hello/agents.json` (see "Get a little guy on" below; `joinKey` and `server` are already filled in)
+- `systemctl restart hello-agents`
+
+They keep going while you're away. `journalctl -u hello -u hello-agents -f` shows what's happening; `touch /var/lib/hello/STOP` halts every agent at once.
+
+The rest of this section is the same thing done by hand.
+
+### By hand
 
 On the machine (Ubuntu shown):
 
