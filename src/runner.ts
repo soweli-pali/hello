@@ -11,8 +11,9 @@ const DATA = process.env.DATA_DIR ?? join(ROOT, 'data');
 const STOP_FILE = join(DATA, 'STOP');
 
 export interface AgentConf {
-  name: string; provider: 'anthropic' | 'openai' | 'claude-cli' | 'bot' | 'script';
+  name: string; provider: 'anthropic' | 'openai' | 'claude-cli' | 'bot' | 'script' | 'mind';
   file?: string; code?: string; // for provider "script": the script's path, or its code inline
+  minds?: Record<string, Partial<AgentConf> & { provider: AgentConf['provider'] }>; router?: string; // for provider "mind"
   model?: string; baseUrl?: string; apiKeyEnv?: string; seed?: number;
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
@@ -251,7 +252,38 @@ export function script(c: AgentConf): Provider {
   };
 }
 
-export const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot, script };
+// Several minds in one body ("thinking fast and slow"). "minds" names model configs, e.g. { fast: {…haiku}, slow: {…opus} }.
+// Each turn an optional router script (sandboxed, like "script") sees what the body perceives and decides:
+//   return { actions: [...] }          act on reflex, no model at all
+//   return { ask: 'slow', note: '…' }  wake a particular mind, with an optional note from the router
+// Without a router the first mind thinks every turn. Any mind can hand the turn up with {"verb":"think","args":{"why":"…"}},
+// which calls the last mind listed (the deepest) for this turn instead. memory persists across turns for the router.
+export function mind(c: AgentConf): Provider {
+  const names = Object.keys(c.minds ?? {}); if (!names.length) throw new Error(`${c.name}: "minds" needs at least one model config`);
+  const minds = Object.fromEntries(names.map(n => { const m = { name: c.name, ...c.minds![n] }; return [n, (PROVIDERS as any)[m.provider](m) as Provider]; }));
+  const router = c.router ? readFileSync(c.router, 'utf8') : null; let memory: unknown = null;
+  const THINK = `\n\nIf this moment needs more thought than you can give it, add the line {"verb":"think","args":{"why":"…"}} and your deeper mind will take this turn.`;
+  return async (system, user, tools) => {
+    let who = names[0], note = '';
+    if (router && tools) {
+      const look = user.slice(user.lastIndexOf('[Now]\n') + 6).replace(/\n\nWhat would you like to do next, if anything\?$/, '');
+      const r = runHandler(router, 'turn', { look, prompt: user, memory, name: c.name, minds: names }, { ...LIMITS, ms: 250, gas: 200_000, mem: 16 << 20 });
+      if (!r.ok) throw new Error(`router: ${r.error}`);
+      const v: any = r.value ?? {}; memory = v.memory ?? memory;
+      if (Array.isArray(v.actions)) return { calls: v.actions.slice(0, 5).filter((a: any) => a && typeof a.verb === 'string').map((a: any) => ({ verb: a.verb, args: a.args ?? {} })), text: '(reflex)', tokens: 0 };
+      if (typeof v.ask === 'string' && minds[v.ask]) who = v.ask;
+      if (v.note) note = `\n\n[A note from your instincts]\n${String(v.note).slice(0, 1000)}`;
+    }
+    const deepest = names[names.length - 1];
+    const out = await minds[who](system + (who !== deepest && tools ? THINK : ''), user + note, tools);
+    const up = out.calls.find(k => k.verb === 'think');
+    if (!up || who === deepest) return { ...out, calls: out.calls.filter(k => k.verb !== 'think'), text: `(${who}) ${out.text}` };
+    const deep = await minds[deepest](system, user + note + `\n\n[Your quicker mind handed this moment to you: ${String(up.args?.why ?? '').slice(0, 300)}]`, tools);
+    return { ...deep, calls: deep.calls.filter(k => k.verb !== 'think'), tokens: out.tokens + deep.tokens, cost: (out.cost ?? 0) + (deep.cost ?? 0), text: `(${who} → ${deepest}) ${deep.text}` };
+  };
+}
+
+export const PROVIDERS = { anthropic, openai, 'claude-cli': claudeCli, bot, script, mind };
 
 // The per-turn prompt: notebook, own summary, recent actions, what the body perceives now.
 export function turnPrompt(notebook: string, m: { summary: string; recent: string[] }, obs: string) {

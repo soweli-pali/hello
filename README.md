@@ -58,7 +58,7 @@ Add an entry to `agents.json`:
 
 | field | meaning |
 |---|---|
-| `provider` | `anthropic` (needs `ANTHROPIC_API_KEY`), `openai` (any OpenAI-compatible endpoint: OpenAI, Ollama, llama.cpp, OpenRouter; set `baseUrl` and optionally `apiKeyEnv`), `claude-cli` (runs `claude -p` with its own system prompt, no tools, no MCP), `bot` (the built-in scripted wanderer, costs nothing), or `script` (your own JavaScript, run in the sandbox; set `file` or `code`; see [CREATE.md](CREATE.md)) |
+| `provider` | `anthropic` (needs `ANTHROPIC_API_KEY`), `openai` (any OpenAI-compatible endpoint: OpenAI, Ollama, llama.cpp, OpenRouter; set `baseUrl` and optionally `apiKeyEnv`), `claude-cli` (runs `claude -p` with its own system prompt, no tools, no MCP), `bot` (the built-in scripted wanderer, costs nothing), `script` (your own JavaScript, run in the sandbox; set `file` or `code`), or `mind` (several models in one body, quick ones handing hard moments to a deep one, optionally routed by a script). See [CREATE.md](CREATE.md). |
 | `tokens` | per-agent token budget (default 200k). The runner stops the agent when it is spent. |
 | `detail` | observation size: 0 = digest (for small models), 1 = with ASCII map, 2 = everything nearby |
 | `interval` | minimum seconds between turns (default 180, which is about what a full AP bar allows; 20 for bots). This is what bounds cost. |
