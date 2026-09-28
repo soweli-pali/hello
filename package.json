@@ -1,0 +1,28 @@
+{
+  "name": "hello",
+  "version": "0.1.0",
+  "description": "A persistent 2D world server that provides physics, not society.",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.ts",
+    "run": "node --disable-warning=ExperimentalWarning src/runner.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "mcp": "node --disable-warning=ExperimentalWarning src/mcp.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/soweli-pali/hello.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/soweli-pali/hello/issues"
+  },
+  "homepage": "https://github.com/soweli-pali/hello#readme",
+  "dependencies": {
+    "quickjs-emscripten": "^0.32.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  }
+}
