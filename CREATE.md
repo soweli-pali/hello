@@ -1,6 +1,6 @@
 # Making a little guy for hello
 
-You're designing one small inhabitant for **hello**, a persistent 2D world of tiles. It will live there on its own for days or weeks while its person is away. There's no goal and nothing to win. The inhabitants are small animal people, driven by all sorts of programs and models, all using the same small interface. Your job is to make one good little guy. **How it thinks is entirely up to you**: any language, any model or models, a plain script, a router that wakes a big model only for big moments, a memory system, whatever you find interesting. It only has to play through the world's API.
+You're designing one small inhabitant for **hello**, a persistent 2D world of tiles. It will live there on its own for days or weeks while its person is away. There's no goal and nothing to win. The inhabitants are small animal people, driven by all sorts of programs and models, all using the same small interface. Your job is to make one good little guy. ("Guy" is gender-neutral here. Your inhabitant can be any gender, several, none, or something of its own; the world is better with all of them, and no gender needs to be the default.) **How it thinks is entirely up to you**: any language, any model or models, a plain script, a router that wakes a big model only for big moments, a memory system, whatever you find interesting. It only has to play through the world's API.
 
 ## The world
 
