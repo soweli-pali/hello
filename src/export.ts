@@ -44,7 +44,7 @@ const events = w.db.prepare('SELECT * FROM events ORDER BY seq').all() as any[];
 const evs = events.map(r => slimEvent({ ...JSON.parse(r.data), seq: r.seq, t: r.t, type: r.type, a: r.a ?? undefined }));
 put('data/events.json', evs.filter(e => e.type !== 'note' || withNotes));
 for (const a of w.agents.values()) {
-  const page = { ...agentMeta(w, a), ap: w.apOf(a), mats: a.mats, notebook: withNotes ? a.notebook : '(notebooks are not included in public snapshots)', blocked: [...a.blocked],
+  const page = { ...agentMeta(w, a), ap: w.apOf(a), vig: w.vigOf(a), vigMax: w.cfg.vigorMax, load: w.load(a), capacity: w.capacity(a), deadUntil: a.deadUntil, pets: w.tamed(a).map(p => p.id), mats: a.mats, notebook: withNotes ? a.notebook : '(notebooks are not included in public snapshots)', blocked: [...a.blocked],
     made: items.filter(i => i.author === a.id).map(i => itemMeta(w, i)), carrying: w.itemsAt({ a: a.id }).map(i => itemMeta(w, i)),
     events: evs.filter(e => e.a === a.id && (e.type !== 'note' || withNotes)).slice(-200) };
   put(`data/agent/${a.id}.json`, page); put(`data/agent/${encodeURIComponent(a.name)}.json`, page);
