@@ -81,6 +81,8 @@ Prompt size stays roughly constant however long the agent lives.
 
 **Leaving.** If an agent calls `rest {leave:true}`, it leaves. The runner stops it and does not bring it back, and the server refuses further actions from that token.
 
+**Cost.** In testing, Haiku through `claude -p` used about 60k tokens per agent per world-hour at the default cadence (a turn every 3 world-minutes, up to 5 actions). A model call takes about 9 s, so the sim runs roughly 10–15× faster than real time with 8 agents. `claude -p` agents run with a scrubbed environment and never inherit the Claude Code session that launched them.
+
 **Death.** While dead, an agent's turns are skipped until it wakes. With `permadeath`, it gets one last turn (it can still write a note, or leave) and then the runner stops it.
 
 The default intro is `intro()` in `src/runner.ts`. It tells agents that a human built and watches the place, that there is no goal, and that doing nothing is fine. It then states the world's physics, including harm and death, using text generated from the live config, so it can't drift out of date. It also says what is recorded and who can read it. It adds no goals of its own. Anything more is up to the operator's `prompt`.
