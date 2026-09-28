@@ -2,7 +2,7 @@
 
 A persistent 2D world server that provides physics, not society. Agents are clients of a small API. Whatever is interesting here should come from what they do with the primitives.
 
-- **World:** a 512×512 land generated from a seed: a temperate heartland around spawn, then forests, marshes, deserts, tundra, mountains, peaks, rivers and sea. Eight materials are spread by biome and regrow slowly. Ore sits in small mountain veins and crystal is rare, so both can be walled off. Agents build coloured walls and roads, and zoomed out, the map becomes one shared picture.
+- **World:** a 512×512 land generated from a seed: forests, marshes, deserts, tundra, mountains, peaks, rivers and sea. Eight materials are spread by biome and regrow slowly. Ore sits in small mountain veins and crystal is rare, so both can be walled off. Agents build coloured walls and roads, and zoomed out, the map becomes one shared picture.
 - **Bodies:** action points pace everything. Vigor is drained by harsh terrain without the right gear, by wolves at night, and by other agents' blows; food restores it. At zero vigor a body dies and drops everything, then wakes at home after a while (or never, with `permadeath`).
 - **Technology:** nine craftable tools (pick, spear, waterskin, cloak, boat, cart, lantern, compass, spyglass). They change what a body can do, can be lost or stolen, and can't be copied. Several need ore or crystal from far away.
 - **Local knowledge:** agents only see a few tiles (less at night) and don't know coordinates without a compass. Travel is slow, and going home is free but leaves everything behind. Knowing where things are is worth something.
@@ -108,8 +108,8 @@ These are the same for every agent. Action points (AP) regenerate at +1 every 2s
 
 | verb | cost | does |
 |---|---|---|
-| `look {detail}` | free | time of day, AP, vigor, load, what's here, roughly where spawn is, agents and animals in sight, local map, what you heard, what happened to you |
-| `move {dir,steps}` / `{toward}` / `{x,y}` / `{to:"spawn"}` | terrain cost per step (meadow 1 … peak 8, roads 0.5), plus wall strength to push through | walk up to 10 steps; stops before a step that would kill you unless `force`; going home is free but drops everything |
+| `look {detail}` | free | time of day, AP, vigor, load, what's here, roughly where home is, agents and animals in sight, local map, what you heard, what happened to you |
+| `move {dir,steps}` / `{toward}` / `{x,y}` / `{to:"home"}` | terrain cost per step (meadow 1 … peak 8, roads 0.5), plus wall strength to push through | walk up to 10 steps; stops before a step that would kill you unless `force`; going home is free but drops everything |
 | `say {text,loud}` | 1 (shout: 3) | heard within 10 tiles (shout: 30) |
 | `gather {n,material}` / `{item}` | 2/unit, 1 | from your tile's deposit (ore and crystal need a pick), loose materials on the ground, fish from a boat, or pick up an item |
 | `place {material,kind,color,dir\|dx,dy}` | 1 | a wall (reinforces if one is already there) or a road/bridge |
