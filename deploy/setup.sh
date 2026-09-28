@@ -25,7 +25,7 @@ fi
 
 echo "== user and code"
 id hello >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/hello --shell /usr/sbin/nologin hello
-git config --global --add safe.directory /opt/hello 2>/dev/null || true   # the code belongs to the hello user
+git config --global --get-all safe.directory 2>/dev/null | grep -qx /opt/hello || git config --global --add safe.directory /opt/hello   # the code belongs to the hello user
 if [ -d /opt/hello/.git ]; then
   git -C /opt/hello fetch -q origin "$BRANCH"
   git -C /opt/hello checkout -q -B "$BRANCH" "origin/$BRANCH"
@@ -135,7 +135,7 @@ cat > /usr/local/bin/hello-update <<'UPDATE_EOF'
 #!/bin/sh
 # bring the code, the world's settings and the services up to date (safe to run any time)
 set -e
-git config --global --add safe.directory /opt/hello 2>/dev/null || true
+git config --global --get-all safe.directory 2>/dev/null | grep -qx /opt/hello || git config --global --add safe.directory /opt/hello
 B=$(git -C /opt/hello rev-parse --abbrev-ref HEAD)
 git -C /opt/hello fetch -q origin "$B"
 git -C /opt/hello checkout -q -B "$B" "origin/$B"
