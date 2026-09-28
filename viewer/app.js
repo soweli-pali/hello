@@ -19,7 +19,9 @@ const h = (tag, attrs = {}, ...kids) => {
   for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
   return e;
 };
-const ago = t => { const s = Math.max(0, (Date.now() - t) / 1000 | 0); return s < 60 ? `${s}s` : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d`; };
+// the world's clock: real time live, or the moment a snapshot was taken
+let SKEW = 0; const worldNow = () => Date.now() + SKEW;
+const ago = t => { const s = Math.max(0, (worldNow() - t) / 1000 | 0); return s < 60 ? `${s}s` : s < 3600 ? `${s / 60 | 0}m` : s < 86400 ? `${s / 3600 | 0}h` : `${s / 86400 | 0}d`; };
 const hueOf = s => { let x = 0; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) | 0; return Math.abs(x) % 360; };
 const STR = new Proxy({}, { get: () => 1 }); // strength is only cosmetic client-side
 const FLOORS = new Set(['cobble', 'floor', 'tile', 'cloth', 'garden', 'mosaic']);
@@ -37,6 +39,7 @@ let dirty = true;
 
 async function boot() {
   const [snap, ter] = await Promise.all([api('/api/world'), api('/api/terrain')]);
+  if (STATIC && snap.now) SKEW = snap.now - Date.now();
   S.cfg = snap.cfg; W = snap.cfg.w; H = snap.cfg.h; S.materials = snap.materials; S.biomes = snap.biomes; S.spawn = snap.spawn; S.seq = snap.seq;
   for (const a of snap.agents) S.agents.set(a.id, { ...a, dx: a.x, dy: a.y });
   for (const [x, y, color, m, s, kind] of snap.blocks) S.blocks.set(`${x},${y}`, { color, m, s, kind });
@@ -265,7 +268,7 @@ function draw() {
   }
 }
 
-function phase(t = Date.now()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
+function phase(t = worldNow()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
 function darkness() { const p = phase(); return p >= 0.75 ? 0.5 : p > 0.62 ? (p - 0.62) / 0.13 * 0.5 : p < 0.06 ? (0.06 - p) / 0.06 * 0.5 : 0; }
 async function pollAnimals() {
   try {
@@ -479,7 +482,7 @@ async function showAgent(name) {
       a.deaths ? h('span', { class: 'dim' }, `died ${a.deaths}×`) : ''),
     h('div', { class: 'dim small', style: 'margin-top:4px' }, `carrying ${a.load}/${a.capacity}: `, Object.entries(a.mats).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ') || 'no materials',
       a.tools?.length ? ` · tools: ${a.tools.join(', ')}` : '', a.pets?.length ? ` · followed by ${a.pets.join(', ')}` : '',
-      a.state === 'dead' ? ` · ${a.deadUntil ? `wakes in ${Math.max(0, Math.round((a.deadUntil - Date.now()) / 1000))}s` : 'gone for good'}` : ''),
+      a.state === 'dead' ? ` · ${a.deadUntil ? `wakes in ${Math.max(0, Math.round((a.deadUntil - worldNow()) / 1000))}s` : 'gone for good'}` : ''),
   ];
   if (a.carrying.length) kids.push(h('h3', {}, 'Carrying'), h('div', { class: 'row' }, ...a.carrying.map(i => h('span', {}, itemLink(i.id, `“${i.title}”`), ' '))));
   kids.push(h('h3', {}, 'Notebook ', h('span', { class: 'dim small', style: 'text-transform:none;letter-spacing:0' }, '(private to them; visible to you, and they know)')), a.notebook ? h('pre', { text: a.notebook }) : h('div', { class: 'dim' }, 'empty'));
