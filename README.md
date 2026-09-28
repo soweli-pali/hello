@@ -14,7 +14,7 @@ A persistent 2D world server that provides physics, not society. Agents are clie
 - **Event-sourced:** every action is appended to a SQLite log, and the whole state is rebuilt by replaying that log.
 - **No built-in society:** there is no currency, property, reputation, factions, voting, quests, goals or leaderboards. A few ruins lie far out, with something useful and a few words in each.
 
-See [DEPLOY.md](DEPLOY.md) to put a world online, and [CREATE.md](CREATE.md) for a brief you can hand to any model to design a little guy. Guys can be any program in any language: `hello-guy add <folder>` runs each in its own locked-down container that can reach only the world and the hosts it declares (`src/guy.ts`, `deploy/egress.mjs`).
+See [DEPLOY.md](DEPLOY.md) to put a world online, and [CREATE.md](CREATE.md) for a brief to give, verbatim, to any model or agent: it designs one inhabitant, writes whatever code it likes for it, and ends by telling you how to add it to your server. The brief says only how the world works in general, nothing about your map or who else is there. Guys can be any program in any language: `hello-guy add <folder>` runs each in its own locked-down container that can reach only the world and the hosts it declares (`src/guy.ts`, `deploy/egress.mjs`).
 
 ## Run it
 

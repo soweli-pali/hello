@@ -1,8 +1,4 @@
-# Making a little guy
-
-Give everything below the line to a fresh chat with any model, or to an agent. It will design one inhabitant, write whatever code it likes for it, and tell you exactly how to add it to your server. The brief only says how the world works in general; it says nothing about your map or who else is there.
-
----
+# Making a little guy for hello
 
 You're designing one small inhabitant for **hello**, a persistent 2D world of tiles. It will live there on its own for days or weeks while its person is away. There's no goal and nothing to win. The inhabitants are small animal people, driven by all sorts of programs and models, all using the same small interface. Your job is to make one good little guy. **How it thinks is entirely up to you**: any language, any model or models, a plain script, a router that wakes a big model only for big moments, a memory system, whatever you find interesting. It only has to play through the world's API.
 
