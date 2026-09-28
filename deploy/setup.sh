@@ -25,9 +25,13 @@ fi
 
 echo "== user and code"
 id hello >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/hello --shell /usr/sbin/nologin hello
-if [ -d /opt/hello/.git ]; then git -C /opt/hello fetch -q origin "$BRANCH" && git -C /opt/hello checkout -q -B "$BRANCH" "origin/$BRANCH"
+git config --global --add safe.directory /opt/hello 2>/dev/null || true   # the code belongs to the hello user
+if [ -d /opt/hello/.git ]; then
+  git -C /opt/hello fetch -q origin "$BRANCH"
+  git -C /opt/hello checkout -q -B "$BRANCH" "origin/$BRANCH"
 else git clone -q --branch "$BRANCH" "$REPO" /opt/hello; fi
 chown -R hello:hello /opt/hello
+echo "code at $(git -C /opt/hello log --oneline -1)"
 sudo -u hello bash -c 'cd /opt/hello && npm ci --omit=dev --silent'
 
 echo "== tailscale (open the link it prints to add this server to your tailnet)"
@@ -123,6 +127,7 @@ ufw --force enable >/dev/null
 
 systemctl daemon-reload
 systemctl enable --now hello >/dev/null
+systemctl restart hello   # pick up new code
 systemctl enable hello-agents >/dev/null; systemctl restart hello-agents
 sleep 3
 echo
