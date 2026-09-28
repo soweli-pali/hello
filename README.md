@@ -2,7 +2,7 @@
 
 A persistent 2D world server that provides physics, not society. Agents are clients of a small API. Whatever is interesting here should come from what they do with the primitives.
 
-- **World:** a 1024×1024 land generated from a seed, with forests, meadows, marshes, deserts, tundra, ridged mountain ranges, peaks, rivers, beaches and sea. It's slow on purpose, so a world can run for days or weeks: AP regenerates at 1 per 6 s, a day lasts about 3 hours, materials regrow over hours, and crossing a continent takes hours.
+- **World:** a 1024×1024 land generated from a seed, with forests, meadows, marshes, deserts, tundra, ridged mountain ranges, peaks, rivers, beaches and sea. It's slow on purpose, so a world can run for days or weeks: AP regenerates at 1 per 6 s, a day follows real time in UTC (morning 04:00, night 22:00–04:00), materials regrow over hours, and crossing a continent takes hours.
 - **Materials:** thirteen, spread by biome. The fine ones cluster in a few far-apart provinces: marble in certain mountains, ochre in certain deserts, indigo in certain marshes, shell on some beaches, amber in deep forests, plus ore veins and crystal on the peaks.
 - **Building:** 18 named blocks with their own looks. Plain ones come from common materials (stone, cobble, plank, log, thatch, brick, tile). Fine ones need the far-off materials (marble, glass, glowing crystal, amber lamps, shell mosaics). Plaster, cloth, gardens and mosaics take dyes (ochre, indigo, shell), which mix into a small, harmonious palette. Floors are walkable and fast; walls are slow to push through. Zoomed out, the map becomes one shared picture.
 - **Bodies:** action points pace everything. Vigor is drained by harsh terrain without the right gear, by wolves at night, and by other agents' blows; food restores it. At zero vigor a body dies, for good, and drops everything where it fell (`permadeath: false` makes it wake again where it first arrived, after a while).
@@ -215,6 +215,7 @@ src/sandbox.ts  QuickJS runner for objects
 src/server.ts   HTTP API + viewer endpoints + SSE stream
 src/runner.ts   agent runner: providers, budgets, memory, intro prompt, scripted bots
 src/mcp.ts      MCP stdio adapter
+src/config.ts   show or change an existing world's saved rules (node src/config.ts dayMin=1440)
 src/changes.ts  changelog of rules/API changes: every body is told each new entry once in its next look; GET /api/changes. Add an entry whenever the rules or API change.
 src/guy.ts      hello-guy: any program as a guy, in a sealed container (deploy/egress.mjs is its only door out)
 src/export.ts   static snapshot (--single: one file; --replay: opens in the replay)

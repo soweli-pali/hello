@@ -295,7 +295,7 @@ function draw() {
 }
 
 function drawPerson(a, sx, sy, z) { Critters.draw(cx, { name: a.name, look: a.meta?.look, worn: (a.tools ?? []).includes('cloak') ? ['cloak'] : [], state: a.state }, sx, sy + z * 0.05, z); }
-function phase(t = worldNow()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
+function phase(t = worldNow()) { return (t / (S.cfg.dayMin * 60000) + (S.cfg.dayOffset ?? 0.3)) % 1; }
 function darkness() { const p = phase(); return p >= 0.75 ? 0.5 : p > 0.62 ? (p - 0.62) / 0.13 * 0.5 : p < 0.06 ? (0.06 - p) / 0.06 * 0.5 : 0; }
 async function pollAnimals() {
   if (S.time) return;
@@ -708,7 +708,7 @@ function seek(t) {
   if (tk.dataset.sig !== lines.join('|')) { tk.dataset.sig = lines.join('|'); tk.replaceChildren(...lines.map(l => h('div', { text: l, style: 'animation:none' }))); }
   rebuildBlocks();
   const min = Math.round((t - R.t0) / 60000), p = phase(t), part = p < 0.06 ? 'dawn' : p < 0.3 ? 'morning' : p < 0.5 ? 'midday' : p < 0.62 ? 'afternoon' : p < 0.75 ? 'dusk' : 'night';
-  $('#tlabel').textContent = `day ${Math.floor((t - R.t0 + 0.3 * S.cfg.dayMin * 60000) / (S.cfg.dayMin * 60000)) + 1} · ${part} · ${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+  $('#tlabel').textContent = `day ${Math.floor((t - R.t0 + (S.cfg.dayOffset ?? 0.3) * S.cfg.dayMin * 60000) / (S.cfg.dayMin * 60000)) + 1} · ${part} · ${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
   $('#tslider').value = min; stats(); dirty = true;
 }
 $('#tslider').oninput = e => { seek(R.t0 + +e.target.value * 60000); };

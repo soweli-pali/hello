@@ -94,7 +94,8 @@ export interface Config {
   respawnSec: number; permadeath: boolean;
   safeRadius: number;                 // nobody can be harmed this close to the default landing point (0 = nowhere is safe)
   harm: boolean;                      // whether agents can strike each other at all
-  dayMin: number;                     // real minutes per day/night cycle
+  dayMin: number;                     // real minutes per day/night cycle (1440: a real day)
+  dayOffset: number;                  // where in the cycle the clock's zero falls; 5/6 with a 24h day puts dawn at 04:00 UTC
   animalRespawnMin: number;
   ruins: number;
 }
@@ -102,7 +103,7 @@ export interface Config {
 export const DEFAULTS: Config = {
   w: 1024, h: 1024, seed: 7, apMax: 30, apSec: 6, regenSec: 900, see: 6, hear: 10, reach: 2,
   vigorMax: 10, vigorSec: 240, carry: 40, respawnSec: 1800, permadeath: true, safeRadius: 0, harm: true,
-  dayMin: 180, animalRespawnMin: 120, ruins: 14,
+  dayMin: 1440, dayOffset: 5 / 6, animalRespawnMin: 120, ruins: 14,
 };
 
 export type Loc = { a: string } | { o: string } | { t: [number, number] };
@@ -401,7 +402,8 @@ export class World {
   private landingCache: [number, number] | null = null;
   spawn(): [number, number] { return this.landingCache ??= this.geo.landing(); }
   safe(x: number, y: number) { if (this.cfg.safeRadius <= 0) return false; const [sx, sy] = this.spawn(); return this.dist(x, y, sx, sy) <= this.cfg.safeRadius; }
-  phase(t = this.now()) { return (t / (this.cfg.dayMin * 60_000) + 0.3) % 1; }
+  // 0 = dawn; morning, midday and evening each take a quarter, then night. Real days follow UTC.
+  phase(t = this.now()) { return (t / (this.cfg.dayMin * 60_000) + (this.cfg.dayOffset ?? 0.3)) % 1; }
   night(t = this.now()) { return this.phase(t) >= 0.75; }
   timeWords(t = this.now()) { const p = this.phase(t); return p < 0.25 ? 'morning' : p < 0.5 ? 'midday' : p < 0.75 ? 'evening' : 'night'; }
   has(a: Agent, tool: string) { return this.itemsAt({ a: a.id }).some(i => i.kind === 'tool' && i.title === tool); }
@@ -924,6 +926,8 @@ export const VERBS: Record<string, Verb> = {
 };
 
 // The world's physics, in words, for whoever drives an agent. Generated from config so it is always true.
+// the UTC time at which a real (24h) day reaches a given phase
+const utcHour = (cfg: Config, p: number) => { const h = (((p - (cfg.dayOffset ?? 0.3)) % 1 + 1) % 1) * 24; return `${String(Math.floor(h + 1e-9)).padStart(2, '0')}:${String(Math.round((h % 1) * 60) % 60).padStart(2, '0')} UTC`; };
 export function rulesText(cfg: Config) {
   return [
     `- The land is ${cfg.w}x${cfg.h} tiles of forests, meadows, marshes, deserts, tundra, mountain ranges, rivers and sea. Travel is slow and some places are dangerous.`,
@@ -937,7 +941,8 @@ export function rulesText(cfg: Config) {
     `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks (marble, iron) take two to lift.`,
     `- There is no quick way to travel: every tile is walked (or swum, or sailed). Wherever you are, you have to get back on your own feet.`,
     `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
-    `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less.`,
+    cfg.dayMin === 1440 ? `- Days follow real time in UTC: morning from ${utcHour(cfg, 0)}, midday from ${utcHour(cfg, 0.25)}, evening from ${utcHour(cfg, 0.5)}, night from ${utcHour(cfg, 0.75)} until dawn. At night you see less, and wolves roam.`
+      : `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less, and wolves roam.`,
   ].join('\n');
 }
 
