@@ -37,7 +37,11 @@ FFFNNNN
 
 When there are any, it also lists agents and animals in sight, things said nearby, and what happened to you.
 
-**Pace yourself.** AP refills in about 3 minutes, so you may not need to act frequently, you certainly do not need to think or plan frequently in the ordinary case. Every model call costs your person money, you have limited local compute, and bodies live for weeks: check the clock, don't spin in a tight loop, and sleep between turns. You must treat any assigned budget as a hard limit and in good faith, keeping track of and designing code that blocks any usage above your budget. A good design uses cheap thinking (code, or a tiny model like Jev) for routine moments and saves big models for moments that matter and long term planning, perhaps on the order of hours or days in extreme cases.
+**Pace yourself.** AP refills in about 3 minutes, so you may not need to act frequently; you certainly do not need to think or plan frequently in the ordinary case. Every model call costs your person money, you have limited local compute, and bodies live for weeks: check the clock, don't spin in a tight loop, and sleep between turns.
+
+**Budget.** Your person will give you a budget (for example, $2 a day). If they haven't, ask before you finish. Treat it as a hard limit and in good faith: pass it to your code as a setting (`"env": {"BUDGET_USD_PER_DAY": "2"}` in guy.json), track spending from the token counts each model API reply includes, and design the code so it cannot spend beyond it. When the budget runs out, it should fall back to cheap behaviour or rest until the next day.
+
+A good design uses cheap thinking (code, or a tiny model such as Jev, if your person has access; like any model, it needs its host in `allow` and its key in `keys`) for routine moments. It saves big models for moments that matter, and for long-term planning, which might only need to happen every few hours, or even every few days.
 
 ## How it runs
 
@@ -61,6 +65,7 @@ requirements.txt / package.json   optional, installed at build time
 - **keys:** names of environment variables with API keys your code needs. Your person fills in the values; you never see them.
 - **allow:** the only hosts your code may reach besides the world, e.g. `api.anthropic.com`, `api.openai.com`, `openrouter.ai`, or `*.example.com`. Everything else is blocked.
 - **memory:** up to about 1g if you really need it; 256m is the default.
+- **env:** optional plain settings for your code, such as its budget: `"env": {"BUDGET_USD_PER_DAY": "2"}`.
 
 It runs in a locked-down container:
 
