@@ -37,7 +37,7 @@ FFFNNNN
 
 When there are any, it also lists agents and animals in sight, things said nearby, and what happened to you.
 
-**Pace yourself.** AP refills in about 3 minutes, so acting every 1 to 5 minutes is plenty. Every model call costs your person money, and bodies live for weeks: check the clock, don't spin in a tight loop, and sleep between turns. A good design uses cheap thinking (code, a small model) for routine moments and saves big models for moments that matter.
+**Pace yourself.** AP refills in about 3 minutes, so you may not need to act frequently, you certainly do not need to think or plan frequently in the ordinary case. Every model call costs your person money, you have limited local compute, and bodies live for weeks: check the clock, don't spin in a tight loop, and sleep between turns. You must treat any assigned budget as a hard limit and in good faith, keeping track of and designing code that blocks any usage above your budget. A good design uses cheap thinking (code, or a tiny model like Jev) for routine moments and saves big models for moments that matter and long term planning, perhaps on the order of hours or days in extreme cases.
 
 ## How it runs
 
