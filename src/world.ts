@@ -10,7 +10,40 @@ import type { Animal } from './fauna.ts';
 
 export { MATERIALS };
 export type { Material };
-export const STRENGTH: Partial<Record<Material, number>> = { stone: 4, wood: 3, clay: 2, sand: 1, ore: 8, crystal: 3 };
+// What can be built. Each block has a fixed look; plaster, cloth and gardens take dyes. The finest need far-off materials.
+export interface BlockType { needs: Partial<Record<Material, number>>; s: number; floor?: boolean; dye?: boolean; glow?: boolean; bridge?: boolean; color: string; words: string }
+export const BLOCKS: Record<string, BlockType> = {
+  stone:     { needs: { stone: 1 }, s: 4, color: '#8e8a82', words: 'rough stone wall' },
+  cobble:    { needs: { stone: 1 }, s: 2, floor: true, color: '#77736b', words: 'cobbled road' },
+  plank:     { needs: { wood: 1 }, s: 3, color: '#9b6c40', words: 'plank wall' },
+  floor:     { needs: { wood: 1 }, s: 1, floor: true, bridge: true, color: '#b3875a', words: 'wooden floor (bridges water)' },
+  log:       { needs: { wood: 2 }, s: 6, color: '#6a4a2c', words: 'log wall' },
+  thatch:    { needs: { fiber: 2 }, s: 1, color: '#c8ab5c', words: 'thatch' },
+  brick:     { needs: { clay: 1 }, s: 3, color: '#a9573b', words: 'brick wall' },
+  tile:      { needs: { clay: 1 }, s: 1, floor: true, color: '#bb6d4a', words: 'terracotta tile floor' },
+  plaster:   { needs: { clay: 1, sand: 1 }, s: 2, dye: true, color: '#e4ddcf', words: 'plastered wall' },
+  sandstone: { needs: { sand: 2 }, s: 3, color: '#d7c08a', words: 'sandstone wall' },
+  glass:     { needs: { sand: 3, wood: 1 }, s: 1, color: '#bfe3ea', words: 'glass' },
+  cloth:     { needs: { fiber: 1 }, s: 1, floor: true, dye: true, color: '#e9e2d3', words: 'woven cloth' },
+  garden:    { needs: { food: 1, fiber: 1 }, s: 1, floor: true, dye: true, color: '#5f8f4a', words: 'flower garden' },
+  marble:    { needs: { marble: 1 }, s: 6, color: '#eeebe4', words: 'marble' },
+  mosaic:    { needs: { shell: 1, clay: 1 }, s: 1, floor: true, dye: true, color: '#efe3d6', words: 'shell mosaic floor' },
+  iron:      { needs: { ore: 1 }, s: 10, color: '#4c4f58', words: 'iron wall' },
+  crystal:   { needs: { crystal: 1 }, s: 4, glow: true, color: '#8fe9f1', words: 'glowing crystal' },
+  lamp:      { needs: { amber: 1, ore: 1 }, s: 2, glow: true, color: '#eaa53c', words: 'amber lamp' },
+};
+export const DYES: Record<string, string> = { ochre: '#b5532f', indigo: '#2f408c', shell: '#f2eadd' };
+function hexMix(cols: string[]) {
+  const v = cols.map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)));
+  return '#' + [0, 1, 2].map(k => Math.round(v.reduce((a, c) => a + c[k], 0) / v.length).toString(16).padStart(2, '0')).join('');
+}
+// Dyed blocks take the dyes' mixed colour, lightly carrying the block's own; mixing two or three dyes widens the palette.
+export function blockColor(type: string, dyes: string[] = []) {
+  const bt = BLOCKS[type]; if (!bt) return '#888888';
+  if (!dyes.length || !bt.dye) return bt.color;
+  const d = hexMix(dyes.map(x => DYES[x])); return hexMix([d, d, d, bt.color]);
+}
+const MAT_BLOCK: Record<string, string> = { stone: 'stone', wood: 'plank', clay: 'brick', sand: 'sandstone', ore: 'iron', crystal: 'crystal', marble: 'marble' };
 export const KINDS = ['text', 'svg', 'html', 'abc', 'object', 'tool'] as const;
 export type Kind = typeof KINDS[number];
 const MAX_BODY: Record<Kind, number> = { text: 20_000, svg: 60_000, html: 100_000, abc: 20_000, object: 20_000, tool: 500 };
@@ -42,10 +75,11 @@ export interface Config {
   animalRespawnMin: number;
   ruins: number;
 }
+// Tuned for a world that runs for days or weeks: big, slow, with journeys that take hours.
 export const DEFAULTS: Config = {
-  w: 512, h: 512, seed: 7, apMax: 20, apSec: 2, regenSec: 300, see: 6, hear: 10, reach: 2,
-  vigorMax: 10, vigorSec: 90, carry: 40, respawnSec: 300, permadeath: false, safeRadius: 0, harm: true,
-  dayMin: 48, animalRespawnMin: 20, ruins: 7,
+  w: 1024, h: 1024, seed: 7, apMax: 30, apSec: 6, regenSec: 900, see: 6, hear: 10, reach: 2,
+  vigorMax: 10, vigorSec: 240, carry: 40, respawnSec: 1800, permadeath: false, safeRadius: 0, harm: true,
+  dayMin: 180, animalRespawnMin: 120, ruins: 14,
 };
 
 export type Loc = { a: string } | { o: string } | { t: [number, number] };
@@ -53,11 +87,14 @@ export interface Agent {
   id: string; name: string; x: number; y: number;
   ap: number; apT: number; vig: number; vigT: number; mats: Record<string, number>;
   notebook: string; blocked: Set<string>; state: 'active' | 'resting' | 'left' | 'dead';
-  deadUntil: number; lastBite: number; deaths: number; home: [number, number];
+  deadUntil: number; lastBite: number; deaths: number; home: [number, number]; task: Task | null;
   joined: number; lastSeen: number; meta: Record<string, unknown>;
   hearCursor: number; // in-memory only: last event seq this agent has been shown
 }
-export interface Block { m: Material; color: string; s: number; by: string; t: number; kind: 'wall' | 'road' }
+export interface Block { m: string; color: string; s: number; by: string; t: number; kind: 'wall' | 'road'; dye?: string[] }
+export type Task = { kind: 'journey'; dir?: string; dest?: [number, number]; left: number; ignore?: boolean; since: number }
+  | { kind: 'gather'; left: number; m?: string; since: number }
+  | { kind: 'build'; plan: { x: number; y: number; block: string; dye?: string[] }[]; i: number; since: number };
 export interface Item {
   id: string; kind: Kind; title: string; body: string; author: string; t: number;
   hash: string; cites: string[]; loc: Loc; state?: unknown; mats?: Record<string, number>;
@@ -68,7 +105,7 @@ export interface Result { ok: boolean; text: string; data?: unknown }
 const DIRS: Record<string, [number, number]> = {
   n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0], ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1],
 };
-const LETTER: Record<Material, string> = { stone: 'S', wood: 'W', clay: 'C', sand: 'N', fiber: 'F', food: 'B', ore: 'O', crystal: 'X' };
+const LETTER: Record<Material, string> = { stone: 'S', wood: 'W', clay: 'C', sand: 'N', fiber: 'F', food: 'B', ore: 'O', crystal: 'X', marble: 'M', ochre: 'R', indigo: 'I', shell: 'H', amber: 'Y' };
 export const key = (x: number, y: number) => `${x},${y}`;
 const locKey = (l: Loc) => 'a' in l ? `a:${l.a}` : 'o' in l ? `o:${l.o}` : `t:${l.t[0]},${l.t[1]}`;
 const clampStr = (s: unknown, n: number) => String(s ?? '').slice(0, n);
@@ -97,6 +134,7 @@ export class World {
   ground = new Map<string, Record<string, number>>(); // loose materials lying on tiles
   items = new Map<string, Item>();
   held = new Map<string, Set<string>>(); // locKey -> item ids
+  taskSeen = new Map<string, { since: number; ids: Set<string> }>();
   recent: Ev[] = [];
   listeners = new Set<(e: Ev) => void>();
   now = () => Date.now();
@@ -144,21 +182,24 @@ export class World {
     switch (e.type) {
       case 'join': {
         const a: Agent = { id: e.a!, name: e.name, x: e.x, y: e.y, ap: this.cfg.apMax, apT: e.t, vig: this.cfg.vigorMax, vigT: e.t, mats: {},
-          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
+          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], task: null, joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
         this.agents.set(a.id, a); this.byName.set(a.name.toLowerCase(), a.id); break;
       }
-      case 'move': ag!.x = e.x; ag!.y = e.y; break;
-      case 'home': this.dropAll(ag!, e.from[0], e.from[1]); ag!.x = e.x; ag!.y = e.y; break;
+      case 'move': ag!.x = e.x; ag!.y = e.y; if (e.left !== undefined && ag!.task && 'left' in ag!.task) ag!.task.left = e.left; break;
+      case 'task': ag!.task = e.task; break;
+      case 'task_end': ag!.task = null; break;
+      case 'home': this.dropAll(ag!, e.from[0], e.from[1]); ag!.x = e.x; ag!.y = e.y; ag!.task = null; break;
       case 'gather': {
         if (e.loose) { const g = this.ground.get(key(e.x, e.y))!; g[e.m] -= e.n; }
         else if (e.m !== 'food' || !e.fish) this.taken.set(key(e.x, e.y), { amt: this.depositAt(e.x, e.y, e.t).amt - e.n, t: e.t });
         ag!.mats[e.m] = (ag!.mats[e.m] ?? 0) + e.n; break;
       }
       case 'place': case 'build': {
-        if (ag) ag.mats[e.m] -= 1;
-        const k = key(e.x, e.y), b = this.blocks.get(k), s = e.kind === 'road' ? 1 : STRENGTH[e.m as Material]!;
-        if (b) { b.s += s; if (e.color) b.color = e.color; }
-        else this.blocks.set(k, { m: e.m, color: e.color, s, by: e.a ?? 'world', t: e.t, kind: e.kind ?? 'wall' });
+        if (ag) for (const [m, n] of Object.entries((e.needs ?? {}) as Record<string, number>)) ag.mats[m] -= n;
+        if (ag && ag.task?.kind === 'build' && e.planStep !== undefined) ag.task.i = e.planStep + 1;
+        const k = key(e.x, e.y), b = this.blocks.get(k), bt = BLOCKS[e.m] ?? BLOCKS.stone;
+        if (b) { b.s += bt.s; }
+        else this.blocks.set(k, { m: e.m, color: e.color ?? blockColor(e.m, e.dye), s: bt.s, by: e.a ?? 'world', t: e.t, kind: bt.floor ? 'road' : 'wall', dye: e.dye });
         break;
       }
       case 'remove': {
@@ -200,13 +241,13 @@ export class World {
       case 'tame': { const an = this.fauna.byId.get(e.animal)!; an.tamedBy = e.a!; ag!.mats.food -= 1; break; }
       case 'die': {
         this.dropAll(ag!, ag!.x, ag!.y);
-        ag!.state = 'dead'; ag!.deadUntil = e.until ?? Infinity; ag!.deaths++;
+        ag!.state = 'dead'; ag!.deadUntil = e.until ?? Infinity; ag!.deaths++; ag!.task = null;
         break;
       }
       case 'wake': ag!.x = e.x; ag!.y = e.y; ag!.state = 'active'; ag!.vig = this.cfg.vigorMax; ag!.vigT = e.t; ag!.ap = this.cfg.apMax; ag!.apT = e.t; break;
       case 'note': ag!.notebook = e.text; break;
       case 'rest': ag!.state = 'resting'; break;
-      case 'leave': this.releaseAnimals(ag!); ag!.state = 'left'; break;
+      case 'leave': this.releaseAnimals(ag!); ag!.state = 'left'; ag!.task = null; break;
       case 'block': e.on ? ag!.blocked.add(e.target) : ag!.blocked.delete(e.target); break;
       case 'config': Object.assign(this.cfg, e.cfg); break;
     }
@@ -254,7 +295,11 @@ export class World {
       for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== 3 || hash(x + dx, y + dy, 5) < 0.4) continue;
         if (isWater(this.geo.biomeAt(x + dx, y + dy))) continue;
-        this.emit('build', undefined, { x: x + dx, y: y + dy, m: 'stone', color: '#7a766c', kind: 'wall' });
+        this.emit('build', undefined, { x: x + dx, y: y + dy, m: n % 3 === 0 ? 'marble' : n % 3 === 1 ? 'sandstone' : 'stone' });
+      }
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        if (hash(x + dx, y + dy, 6) < 0.45 || isWater(this.geo.biomeAt(x + dx, y + dy))) continue;
+        this.emit('build', undefined, { x: x + dx, y: y + dy, m: 'mosaic', dye: (dx + dy) % 2 ? ['indigo', 'shell'] : ['ochre', 'shell'] });
       }
       const lore = LORE[n % LORE.length], tool = RUIN_TOOLS[n % RUIN_TOOLS.length];
       this.emit('make', undefined, { id: `r${n + 1}a`, kind: 'text', title: 'carved words', body: lore, author: 'world', hash: sha(lore), cites: [], loc: { t: [x, y] } });
@@ -309,7 +354,7 @@ export class World {
   // What one step onto (x,y) costs a body: AP, and vigor drained by exposure.
   step(a: Agent, x: number, y: number) {
     const b = this.geo.biomeAt(x, y), info = BIOME_INFO[b], blk = this.blocks.get(key(x, y));
-    if (blk?.kind === 'road') return { ap: 0.5, dv: 0, b };
+    if (blk?.kind === 'road') return { ap: 0.5, dv: 0, b }; // any floor: roads, bridges, paved squares
     const boat = isWater(b) && this.has(a, 'boat');
     const ap = (boat ? 1 : info.cost) + (blk ? blk.s : 0);
     const dv = boat || this.safe(x, y) || (info.guard && this.has(a, info.guard)) ? 0 : info.drain;
@@ -403,6 +448,109 @@ export class World {
     if (!mine && this.dist(a.x, a.y, p[0], p[1]) > r) throw new Error(`#${it.id} is out of reach.`);
   }
   room(a: Agent) { return Math.max(0, this.capacity(a) - this.load(a)); }
+
+  placeBlock(a: Agent, type: string, dyeArg: unknown, tx: number, ty: number, planStep?: number): Result {
+    const bt = BLOCKS[String(type ?? '')];
+    if (!bt) throw new Error(`block must be one of ${Object.keys(BLOCKS).join(', ')}`);
+    const dye = (Array.isArray(dyeArg) ? dyeArg : dyeArg ? String(dyeArg).split(/[+,\s]+/) : []).map(String).filter(Boolean);
+    for (const d of dye) if (!DYES[d]) throw new Error(`dyes are ${Object.keys(DYES).join(', ')}`);
+    if (dye.length && !bt.dye) throw new Error(`${type} can't be dyed.`);
+    this.near(a, tx, ty);
+    if (!this.geo.inside(tx, ty)) throw new Error('Outside the world.');
+    const b = this.blocks.get(key(tx, ty)), water = isWater(this.geo.biomeAt(tx, ty));
+    if (water && !bt.bridge) throw new Error('Only a wooden floor can be laid on water.');
+    if (b && (b.m !== type || bt.floor)) throw new Error(`There is already ${BLOCKS[b.m]?.words ?? b.m} there; remove it first.`);
+    const needs: Record<string, number> = { ...bt.needs } as Record<string, number>; for (const d of dye) needs[d] = (needs[d] ?? 0) + 1;
+    const short = Object.entries(needs).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} more ${m}`);
+    if (short.length) throw new Error(`A ${type} needs ${short.join(', ')}.`);
+    this.need(a, 1);
+    this.emit('place', a.id, { x: tx, y: ty, m: type, dye: dye.length ? dye : undefined, needs, color: blockColor(type, dye), cost: 1, planStep });
+    return { ok: true, text: b ? `You reinforced the ${bt.words} ${this.at(a, tx, ty)}.` : `You placed ${bt.words}${dye.length ? ` dyed ${dye.join('+')}` : ''} ${this.at(a, tx, ty)}.` };
+  }
+
+  // Bodies carry on with their tasks between their owners' turns. Called every few seconds of world time.
+  tick() {
+    for (const a of this.agents.values()) {
+      if (!a.task || a.state !== 'active') continue;
+      try { this.tickTask(a); } catch (e: any) { this.emit('task_end', a.id, { reason: String(e?.message ?? e) }); }
+    }
+  }
+  private interruption(a: Agent, t: Task, seen: Set<string>): string | null {
+    for (const e of this.recent) {
+      if (e.seq <= t.since || e.a === a.id) continue;
+      if (e.type === 'strike' && e.target === a.id) return `${this.agents.get(e.a!)?.name} struck you`;
+      if (e.type === 'hurt' && e.a === a.id) return 'something hurt you';
+      if (t.kind === 'journey' && t.ignore) continue;
+      if (e.type === 'say' && !a.blocked.has(e.a!) && this.dist(a.x, a.y, e.x, e.y) <= this.cfg.hear * (e.loud ? 3 : 1)) return `${this.agents.get(e.a!)?.name} spoke nearby`;
+    }
+    if (t.kind === 'journey' && !t.ignore) {
+      const r = this.sight(a);
+      for (const o of this.agents.values()) if (o.id !== a.id && o.state !== 'left' && o.state !== 'dead' && !seen.has(o.id) && this.dist(a.x, a.y, o.x, o.y) <= r) return `${o.name} came into sight`;
+    }
+    return null;
+  }
+  private tickTask(a: Agent) {
+    const t = a.task!;
+    const bite = this.dangers(a); if (bite) { if (a.state === 'active' && a.task) this.emit('task_end', a.id, { reason: bite }); return; }
+    const sightNow = () => new Set([...this.agents.values()].filter(o => this.dist(a.x, a.y, o.x, o.y) <= this.sight(a)).map(o => o.id));
+    // who this body has already seen while on this task (memory only; not part of the world's state)
+    let known = this.taskSeen.get(a.id);
+    if (!known || known.since !== t.since) this.taskSeen.set(a.id, known = { since: t.since, ids: sightNow() });
+    const why = this.interruption(a, t, known.ids);
+    for (const id of sightNow()) known.ids.add(id);
+    if (why) { this.emit('task_end', a.id, { reason: why }); return; }
+    if (t.kind === 'journey' || t.kind === 'build') {
+      // walking: toward a destination, or in a direction, as far as AP allows this tick
+      let dest: [number, number] | null = null, dir: [number, number] | null = null;
+      if (t.kind === 'journey') { if (t.dest) dest = t.dest; else dir = DIRS[t.dir!]; }
+      else {
+        while (t.i < t.plan.length) { const p = t.plan[t.i], b = this.blocks.get(key(p.x, p.y)); if (b && b.m === p.block) { t.i++; continue; } break; }
+        if (t.i >= t.plan.length) { this.emit('task_end', a.id, { reason: 'the building is finished' }); return; }
+        const p = t.plan[t.i];
+        if (this.dist(a.x, a.y, p.x, p.y) <= this.cfg.reach) {
+          for (let k = 0; k < 6 && a.task && t.i < t.plan.length; k++) {
+            const q = t.plan[t.i], ex = this.blocks.get(key(q.x, q.y));
+            if (ex && ex.m === q.block) { t.i++; continue; }
+            if (this.dist(a.x, a.y, q.x, q.y) > this.cfg.reach) break;
+            if (this.apOf(a) < 1) return;
+            try { this.placeBlock(a, q.block, q.dye, q.x, q.y, t.i); }
+            catch (e: any) { if (/action points/.test(e.message)) return; this.emit('task_end', a.id, { reason: `building stopped: ${e.message}` }); return; }
+          }
+          if (a.task && t.i >= t.plan.length) this.emit('task_end', a.id, { reason: 'the building is finished' });
+          return;
+        }
+        dest = [p.x, p.y];
+      }
+      const seen = known.ids, vig0 = this.vigOf(a);
+      let cx = a.x, cy = a.y, cost = 0, dv = 0, steps = 0, stop: string | null = null;
+      while (steps < 12) {
+        if (t.kind === 'journey' && t.left - steps <= 0) { stop = 'you arrived'; break; }
+        const sx = dest ? Math.sign(dest[0] - cx) : dir![0], sy = dest ? Math.sign(dest[1] - cy) : dir![1];
+        if (!sx && !sy) { stop = 'you arrived'; break; }
+        if (t.kind === 'build' && this.dist(cx, cy, dest![0], dest![1]) <= this.cfg.reach) break;
+        const nx = cx + sx, ny = cy + sy;
+        if (!this.geo.inside(nx, ny)) { stop = 'the world ends here'; break; }
+        const s = this.step(a, nx, ny);
+        if (this.apOf(a) < cost + s.ap) break;
+        if (vig0 - dv - s.dv <= 3) { stop = `your vigor is low (${(vig0 - dv).toFixed(1)}); you stopped before going on`; break; }
+        cost += s.ap; dv += s.dv; cx = nx; cy = ny; steps++;
+        if (t.kind === 'journey' && !t.ignore && [...this.agents.values()].some(o => o.id !== a.id && o.state !== 'left' && o.state !== 'dead' && !seen.has(o.id) && this.dist(cx, cy, o.x, o.y) <= this.sight(a))) break;
+      }
+      if (steps) this.emit('move', a.id, { x: cx, y: cy, cost, dv: dv ? -+dv.toFixed(2) : undefined, left: t.kind === 'journey' ? (t.dest ? this.dist(cx, cy, t.dest[0], t.dest[1]) : t.left - steps) : undefined });
+      if (stop && a.task) this.emit('task_end', a.id, { reason: stop });
+      return;
+    }
+    if (t.kind === 'gather') {
+      const pick = this.has(a, 'pick'), n = Math.min(t.left, pick ? 5 : 3, Math.floor(this.apOf(a) / 2));
+      if (n < 1) return;
+      const before = a.mats[t.m ?? ''] ?? 0;
+      const r = VERBS.gather.run(this, a, { n, material: t.m, __task: true });
+      const got = (a.mats[t.m ?? ''] ?? 0) - before;
+      t.left -= got;
+      if (!r.ok || got <= 0) this.emit('task_end', a.id, { reason: r.text });
+      else if (t.left <= 0) this.emit('task_end', a.id, { reason: 'you gathered all you meant to' });
+    }
+  }
 
   // Run an object's handler and turn its (validated) wishes into one 'use' event.
   runObject(a: Agent, o: Item, fn: 'use' | 'receive', extra: Record<string, unknown>, cost: number): Result {
@@ -549,32 +697,70 @@ export const VERBS: Record<string, Verb> = {
       if (!d.m || d.amt <= 0) throw new Error(d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather on this tile. Deposits show on the map as capital letters.');
       const pick = w.has(a, 'pick');
       if ((d.m === 'ore' || d.m === 'crystal') && !pick) throw new Error(`There is ${d.m} here, but you need a pick to get it out.`);
-      const n = Math.max(1, Math.min(pick ? 5 : 3, Math.trunc(x.n ?? 1), d.amt, room));
+      const want_n = Math.trunc(x.n ?? 1), cap = pick ? 5 : 3;
+      if (want_n > cap && !x.__task) {
+        w.emit('task', a.id, { task: { kind: 'gather', left: Math.min(200, want_n), m: d.m, since: w.seq + 1 } });
+        return { ok: true, text: `You settle in to gather ${Math.min(200, want_n)} ${d.m}. It carries on by itself as your strength allows, until done, the deposit runs out, or you're full.` };
+      }
+      const n = Math.max(1, Math.min(cap, want_n, d.amt, room));
       w.need(a, 2 * n); w.emit('gather', a.id, { x: a.x, y: a.y, m: d.m, n, cost: 2 * n });
       return { ok: true, text: `You gathered ${n} ${d.m}. (${d.amt - n} left here.)` };
     },
   },
   place: {
-    help: 'Place a block within reach. A wall (stone, wood, clay, sand, ore, crystal) is coloured and slow to push through; placing on a wall reinforces it. A road (stone, sand or wood; only wood bridges water) makes any tile cost 0.5 AP to cross, with no exposure. 1 AP.',
-    args: { material: 'stone|wood|clay|sand|ore|crystal', kind: 'wall (default) | road', color: '#rrggbb (walls)', ...AIM },
+    help: `Place a block within reach, made from materials you carry. Walls are slow to push through; placing the same wall again reinforces it. Floors (cobble, floor, tile, cloth, garden, mosaic) cost only 0.5 AP to cross, like roads; wooden floor bridges water. Blocks marked dye can be coloured with ochre, indigo and/or shell (1 of each dye used; mixing makes new colours). Blocks: ${Object.entries(BLOCKS).map(([k, b]) => `${k} (${Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ')}${b.floor ? ', floor' : ''}${b.dye ? ', dye' : ''}${b.glow ? ', glows' : ''})`).join('; ')}. 1 AP.`,
+    args: { block: Object.keys(BLOCKS).join('|'), dye: 'optional: ochre, indigo, shell, or several, e.g. "ochre+shell"', ...AIM },
+    run: (w, a, x) => { const [tx, ty] = w.target(a, x); return w.placeBlock(a, x.block ?? MAT_BLOCK[x.material] ?? x.material, x.dye, tx, ty); },
+  },
+  build: {
+    help: 'Build a whole plan over time: your body walks and places block after block on its own (same costs as doing it by hand) until done, out of materials, or interrupted. Draw the plan as rows of characters with a legend, e.g. {"grid":["BBBBB","B...B","B.D.B","BBBBB"], "legend":{"B":"brick","D":"floor",".":""}}. Legend values are blocks, optionally with dyes: "plaster:indigo+shell". The grid\'s top-left corner is at your position plus dx,dy (default 1,1). Up to 200 blocks within 16 tiles. Starting is free.',
+    args: { grid: 'array of strings, one per row', legend: 'object: character -> "block" or "block:dye+dye" ("" or missing = skip)', dx: 'offset east of you (default 1)', dy: 'offset south of you (default 1)' },
     run: (w, a, x) => {
-      const m = String(x.material ?? '') as Material, kind = x.kind === 'road' ? 'road' : 'wall';
-      if (!STRENGTH[m]) throw new Error('material must be one of stone, wood, clay, sand, ore, crystal');
-      if ((a.mats[m] ?? 0) < 1) throw new Error(`You have no ${m}.`);
-      const color = /^#[0-9a-f]{6}$/i.test(x.color ?? '') ? x.color.toLowerCase() : undefined;
-      const [tx, ty] = w.target(a, x); w.near(a, tx, ty);
-      if (!w.geo.inside(tx, ty)) throw new Error('Outside the world.');
-      const b = w.blocks.get(key(tx, ty)), water = isWater(w.geo.biomeAt(tx, ty));
-      if (kind === 'road') {
-        if (!['stone', 'sand', 'wood'].includes(m)) throw new Error('Roads are made of stone, sand or wood.');
-        if (water && m !== 'wood') throw new Error('Only wood can bridge water.');
-        if (b) throw new Error(b.kind === 'road' ? 'There is already a road there.' : 'There is a wall there.');
-      } else if (b?.kind === 'road') throw new Error('There is a road there; remove it first.');
-      w.need(a, 1);
-      w.emit('place', a.id, { x: tx, y: ty, m, kind, color: kind === 'road' ? (m === 'wood' ? '#8a6a45' : m === 'sand' ? '#c9b98a' : '#9a978f') : color ?? b?.color ?? '#888888', cost: 1 });
-      const where = w.at(a, tx, ty);
-      return { ok: true, text: kind === 'road' ? `You laid ${water ? 'a bridge' : 'road'} ${where}.` : b ? `You reinforced the wall ${where}.` : `You placed a ${m} wall ${where}.` };
+      const rows: string[] = Array.isArray(x.grid) ? x.grid.map(String) : typeof x.grid === 'string' ? x.grid.split('\n') : [];
+      const legend: Record<string, string> = x.legend && typeof x.legend === 'object' ? x.legend : {};
+      if (!rows.length) throw new Error('build needs a grid (array of strings) and a legend.');
+      const ox = a.x + Math.trunc(x.dx ?? 1), oy = a.y + Math.trunc(x.dy ?? 1), plan: { x: number; y: number; block: string; dye?: string[] }[] = [];
+      rows.forEach((row, j) => [...row].forEach((ch, i) => {
+        const v = legend[ch]; if (!v) return;
+        const [block, dye] = String(v).split(':');
+        if (!BLOCKS[block]) throw new Error(`"${block}" is not a block. Blocks: ${Object.keys(BLOCKS).join(', ')}.`);
+        plan.push({ x: ox + i, y: oy + j, block, dye: dye ? dye.split(/[+,\s]+/).filter(Boolean) : undefined });
+      }));
+      if (!plan.length) throw new Error('The plan places nothing.');
+      if (plan.length > 200) throw new Error('At most 200 blocks per plan.');
+      if (plan.some(p => w.dist(p.x, p.y, a.x, a.y) > 16 || !w.geo.inside(p.x, p.y))) throw new Error('Keep the plan within 16 tiles of you.');
+      const need: Record<string, number> = {};
+      for (const p of plan) { for (const [m, n] of Object.entries(BLOCKS[p.block].needs)) need[m] = (need[m] ?? 0) + n!; for (const d of p.dye ?? []) need[d] = (need[d] ?? 0) + 1; }
+      w.emit('task', a.id, { task: { kind: 'build', plan, i: 0, since: w.seq + 1 } });
+      const short = Object.entries(need).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} ${m}`);
+      return { ok: true, text: `You begin building ${plan.length} blocks. In all it needs ${fmtMats(need)}.${short.length ? ` You are short of ${short.join(', ')}; the work will stop when you run out.` : ''} It carries on by itself; stop to end it.` };
     },
+  },
+  journey: {
+    help: 'Travel a long way over time: your body keeps walking on its own as action points allow (same costs as walking), and stops when it arrives, when your vigor runs low, when someone comes into sight or speaks nearby, or if something attacks you. Starting is free.',
+    args: { dir: 'n,s,e,w,ne,nw,se,sw', tiles: 'how far (up to 500)', toward: 'or an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', ignore: 'true to keep going when others appear or speak' },
+    run: (w, a, x) => {
+      let task: Task;
+      const ignore = x.ignore === true || x.ignore === 'true';
+      if (x.dir) { if (!DIRS[String(x.dir).toLowerCase()]) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); task = { kind: 'journey', dir: String(x.dir).toLowerCase(), left: Math.max(1, Math.min(500, Math.trunc(x.tiles ?? 50))), ignore, since: w.seq + 1 }; }
+      else if (x.toward || (x.x !== undefined && x.y !== undefined)) {
+        let dest: [number, number];
+        if (x.toward) {
+          const t = String(x.toward).replace(/^#/, ''), ag = w.find(t), an = w.fauna.byId.get(t), it = w.items.get(t);
+          const p = ag && ag.state !== 'left' && ag.state !== 'dead' ? [ag.x, ag.y] : an ? w.animalPos(an) : it ? w.posOf(it) : null;
+          if (!p || w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error(`You can't see "${x.toward}" from here.`);
+          dest = [p[0], p[1]];
+        } else dest = w.target(a, x);
+        task = { kind: 'journey', dest, left: w.dist(a.x, a.y, dest[0], dest[1]), ignore, since: w.seq + 1 };
+      } else throw new Error('journey needs dir (+tiles), toward, or x,y with a compass');
+      w.emit('task', a.id, { task });
+      return { ok: true, text: `You set out${task.dir ? ` ${task.dir}, about ${task.left} tiles` : ''}. Your body walks on its own now; you'll hear when something happens.` };
+    },
+  },
+  stop: {
+    help: 'Stop whatever your body is doing on its own (journey, gathering, building). Free.',
+    args: {},
+    run: (w, a) => { if (!a.task) return { ok: true, text: 'You were not doing anything.' }; w.emit('task_end', a.id, { reason: 'you stopped' }); return { ok: true, text: 'You stop.' }; },
   },
   remove: {
     help: 'Break down a wall or road within reach. Each call removes up to 2 strength for 2 AP. Materials are not recovered.',
@@ -791,7 +977,8 @@ export function rulesText(cfg: Config) {
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
     `- move {"to":"home"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
     `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
-    `- Days and nights pass (${cfg.dayMin} real minutes per cycle). At night you see less.`,
+    `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less.`,
+    `- Long efforts can run on their own: journey, gather with a large n, or build from a drawn plan. Your body keeps at it between your turns, at the same cost, and stops when something happens.`,
   ].join('\n');
 }
 
@@ -831,7 +1018,7 @@ function describeTile(w: World, a: Agent, x: number, y: number) {
   return [`${x === a.x && y === a.y ? '' : rel(a, x, y) + ': '}${BIOME_INFO[w.geo.biomeAt(x, y)].words}${w.safe(x, y) ? ' (safe ground)' : ''}.`,
     d.m ? `${d.m} ${d.amt}/${d.cap}.` : '',
     g ? `On the ground: ${g}.` : '',
-    b ? `${b.kind === 'road' ? 'Road' : `Wall of ${b.m}, ${b.color}, strength ${b.s}`}, built by ${b.by === 'world' ? 'no one you know' : w.agents.get(b.by)?.name}.` : '',
+    b ? `${(BLOCKS[b.m]?.words ?? b.m).replace(/^./, c => c.toUpperCase())}${b.dye ? ` dyed ${b.dye.join('+')}` : ''}${b.kind === 'wall' ? `, strength ${b.s}` : ''}, built by ${b.by === 'world' ? 'no one you know' : w.agents.get(b.by)?.name}.` : '',
     its.length ? `Items: ${fmtItems(its)}.` : '',
     who.length ? `Agents: ${who.join(', ')}.` : ''].filter(Boolean).join(' ');
 }
@@ -845,6 +1032,8 @@ export function observe(w: World, a: Agent, detail = 1): string {
   out.push(`Carrying (${w.load(a)}/${w.capacity(a)}): ${fmtMats(a.mats) || 'no materials'}${carried.length ? '; ' + fmtItems(carried) : ''}${pets.length ? `; followed by ${pets.map(p => `${p.sp} ${p.id}`).join(', ')}` : ''}.`);
   out.push(`Here: ${describeTile(w, a, a.x, a.y)}`);
   const [sx, sy] = a.home; out.push(`Home is ${compass ? `at (${sx},${sy}), ` : ''}${roughly(a, sx, sy)}.`);
+  const tk = a.task;
+  if (tk) out.push(`Your body is busy: ${tk.kind === 'journey' ? `journeying ${tk.dir ? tk.dir.toUpperCase() : 'toward your destination'}, ${tk.left} tiles to go` : tk.kind === 'gather' ? `gathering ${tk.m}, ${tk.left} more to go` : `building, ${tk.i}/${tk.plan.length} blocks placed`}. It carries on by itself; "stop" ends it.`);
   const others = [...w.agents.values()].filter(o => o.id !== a.id && o.state !== 'left' && o.state !== 'dead' && w.dist(a.x, a.y, o.x, o.y) <= r);
   if (others.length) out.push(`Agents in sight: ${others.map(o => `${o.name} ${rel(a, o.x, o.y)}${o.state === 'resting' ? ' (resting)' : ''}${a.blocked.has(o.id) ? ' (blocked)' : ''}`).join('; ')}.`);
   const beasts = w.animalsNear(a.x, a.y, r, t).filter(({ an }) => an.tamedBy !== a.id);
@@ -872,7 +1061,7 @@ export function observe(w: World, a: Agent, detail = 1): string {
       }
       rows.push(row);
     }
-    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, = road, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak ~ water; deposits S stone W wood C clay N sand F fiber B berries O ore X crystal):`);
+    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, = floor/road, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water; deposits S stone W wood C clay N sand F fiber B berries O ore X crystal M marble R ochre I indigo H shell Y amber):`);
     out.push(rows.join('\n'));
     if (legend.size) out.push(`Key: ${[...legend].map(([n, d]) => `${d}=${n}`).join(' ')}`);
   }
@@ -887,6 +1076,7 @@ export function observe(w: World, a: Agent, detail = 1): string {
     if (e.type === 'transfer' && 'a' in e.to && e.to.a === a.id && e.a !== a.id) return [`${w.agents.get(e.a!)?.name} gave you ${e.item ? '#' + e.item : `${e.n} ${e.m}`}.`];
     if (e.type === 'strike' && e.target === a.id) return [`${w.agents.get(e.a!)?.name} struck you.`];
     if (e.type === 'die' && e.a !== a.id && w.dist(a.x, a.y, e.x, e.y) <= r) return [`${w.agents.get(e.a!)?.name} died nearby (${e.cause}).`];
+    if (e.type === 'task_end' && e.a === a.id) return [`Your body stopped what it was doing: ${e.reason}.`];
     return [];
   });
   a.hearCursor = w.seq;

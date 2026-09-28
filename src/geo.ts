@@ -1,9 +1,9 @@
 // Geography: deterministic from the seed, computed once, never stored.
 // Large biomes from elevation / temperature / moisture; rivers cut through; the sea rings the land.
 
-export const BIOMES = ['sea', 'river', 'meadow', 'forest', 'marsh', 'desert', 'tundra', 'mountain', 'peak'] as const;
+export const BIOMES = ['sea', 'river', 'meadow', 'forest', 'marsh', 'desert', 'tundra', 'mountain', 'peak', 'beach'] as const;
 export type Biome = typeof BIOMES[number];
-export const MATERIALS = ['stone', 'wood', 'clay', 'sand', 'fiber', 'food', 'ore', 'crystal'] as const;
+export const MATERIALS = ['stone', 'wood', 'clay', 'sand', 'fiber', 'food', 'ore', 'crystal', 'marble', 'ochre', 'indigo', 'shell', 'amber'] as const;
 export type Material = typeof MATERIALS[number];
 
 export const BIOME_INFO: Record<Biome, { cost: number; drain: number; guard?: string; map: string; words: string }> = {
@@ -16,6 +16,7 @@ export const BIOME_INFO: Record<Biome, { cost: number; drain: number; guard?: st
   tundra:   { cost: 2, drain: 0.3, guard: 'cloak',     map: "'", words: 'frozen tundra' },
   mountain: { cost: 4, drain: 0.1,                     map: '^', words: 'mountainside' },
   peak:     { cost: 8, drain: 0.6, guard: 'cloak',     map: 'A', words: 'a high, icy peak' },
+  beach:    { cost: 1, drain: 0,                       map: '_', words: 'a beach' },
 };
 // Which materials pool in which biomes (relative weights). Ore and crystal are placed separately: rare and clustered.
 const YIELD: Partial<Record<Biome, Partial<Record<Material, number>>>> = {
@@ -26,9 +27,10 @@ const YIELD: Partial<Record<Biome, Partial<Record<Material, number>>>> = {
   tundra: { stone: 3, food: 0.6 },
   mountain: { stone: 6 },
   peak: { stone: 2 },
+  beach: { sand: 5, food: 0.5 },
 };
-const DENSITY: Partial<Record<Biome, number>> = { meadow: 0.66, forest: 0.6, marsh: 0.62, desert: 0.7, tundra: 0.72, mountain: 0.64, peak: 0.75 };
-export const REGROW: Record<Material, number> = { stone: 1, wood: 1, clay: 1, sand: 1, fiber: 0.7, food: 0.4, ore: 5, crystal: 12 }; // × regenSec
+const DENSITY: Partial<Record<Biome, number>> = { meadow: 0.66, forest: 0.6, marsh: 0.62, desert: 0.7, tundra: 0.72, mountain: 0.64, peak: 0.75, beach: 0.7 };
+export const REGROW: Record<Material, number> = { stone: 1, wood: 1, clay: 1, sand: 1, fiber: 0.7, food: 0.4, ore: 5, crystal: 12, marble: 4, ochre: 3, indigo: 3, shell: 2, amber: 6 }; // × regenSec
 
 export function hash(x: number, y: number, s: number) {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1442695041)) | 0;
@@ -70,6 +72,7 @@ export class Geo {
       const dc = 99; // no enforced heartland: operators choose where agents arrive
       let b: Biome;
       if (e < 0.3) b = 'sea';
+      else if (e < 0.318 && t > 0.33) b = 'beach';
       else if (e > 0.8 && ridge > 0.62) b = 'peak';
       else if (e > 0.69) b = 'mountain';
       else if (t < 0.3) b = 'tundra';
@@ -79,7 +82,7 @@ export class Geo {
       else b = 'meadow';
       // rivers: thin ridges of a separate noise field, only through lowland
       const r = Math.abs(noise(wx, wy, w * 0.12, S + 40) - 0.5) + Math.abs(noise(x, y, w * 0.05, S + 41) - 0.5) * 0.25;
-      if (r < 0.022 && e < 0.66 && b !== 'sea' && dc > 0.35) b = 'river';
+      if (r < 0.022 && e < 0.66 && b !== 'sea' && b !== 'beach' && dc > 0.35) b = 'river';
       this.biome[i] = BIOMES.indexOf(b);
       // deposits
       const y0 = YIELD[b];
@@ -95,6 +98,13 @@ export class Geo {
       }
       // ore: small veins in the mountains. crystal: rare glints on peaks and deep desert.
       if (b === 'mountain' && noise(x, y, 4, S + 70) > 0.84 && noise(x, y, 40, S + 71) > 0.45) { this.mat[i] = MATERIALS.indexOf('ore') + 1; this.cap[i] = 2 + Math.floor(hash(x, y, S + 72) * 4); }
+      // the fine things: rare, far apart, each tied to one kind of land
+      const put = (m: Material, lo: number, hi: number) => { this.mat[i] = MATERIALS.indexOf(m) + 1; this.cap[i] = lo + Math.floor(hash(x, y, S + 99) * (hi - lo + 1)); };
+      if (b === 'mountain' && noise(x, y, 6, S + 90) > 0.83 && noise(x, y, 60, S + 95) > 0.5) put('marble', 2, 5);
+      if (b === 'desert' && noise(x, y, 5, S + 91) > 0.82) put('ochre', 1, 4);
+      if (b === 'marsh' && noise(x, y, 5, S + 92) > 0.83) put('indigo', 1, 3);
+      if (b === 'beach' && hash(x, y, S + 96) < 0.1) put('shell', 1, 3);
+      if (b === 'forest' && noise(x, y, 4, S + 93) > 0.85 && noise(x, y, 70, S + 94) > 0.55) put('amber', 1, 2);
       if ((b === 'peak' || (b === 'desert' && t > 0.8)) && hash(x, y, S + 80) < 0.006) { this.mat[i] = MATERIALS.indexOf('crystal') + 1; this.cap[i] = 1 + Math.floor(hash(x, y, S + 81) * 2); }
     }
   }

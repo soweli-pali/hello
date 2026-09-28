@@ -23,7 +23,8 @@ export class Fauna {
     let n = 0;
     for (const [sp, s] of Object.entries(SPECIES)) {
       const ok = new Set(s.biomes.map(b => BIOMES.indexOf(b)));
-      for (let k = 0, tries = 0; k < s.count && tries < 20000; tries++) {
+      const count = Math.round(s.count * geo.w * geo.h / (512 * 512));
+      for (let k = 0, tries = 0; k < count && tries < 80000; tries++) {
         const x = Math.floor(hash(tries, n, seed * 13 + 5) * geo.w), y = Math.floor(hash(n, tries, seed * 17 + 9) * geo.h);
         if (!ok.has(geo.biome[y * geo.w + x])) continue;
         const a: Animal = { id: `${sp[0]}${k + 1}`, sp, hx: x, hy: y, hp: s.hp, deadUntil: 0, tamedBy: null };

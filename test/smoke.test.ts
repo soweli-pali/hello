@@ -29,7 +29,7 @@ test('sandbox limits', () => {
 
 test('world, verbs, replay', () => {
   const file = join(dir, 'w.db');
-  const w = new World(file, { apSec: 0.001 });
+  const w = new World(file, { w: 512, h: 512, apSec: 0.001 });
   const a = w.agents.get(w.join('Ada').id)!, b = w.agents.get(w.join('Bo').id)!;
   assert.throws(() => w.join('ada'), /taken/);
   // find a deposit and gather from it
@@ -71,7 +71,7 @@ test('world, verbs, replay', () => {
 });
 
 test('http api', async () => {
-  const w = new World(join(dir, 'h.db'));
+  const w = new World(join(dir, 'h.db'), { w: 512, h: 512 });
   const srv = await startServer(w, 0, '127.0.0.1');
   const base = `http://127.0.0.1:${(srv.address() as any).port}`;
   const j = await (await fetch(base + '/api/join', { method: 'POST', body: JSON.stringify({ name: 'Cy' }) })).json();
@@ -85,7 +85,7 @@ test('http api', async () => {
 });
 
 test('objects hold things and trade by their own rules', () => {
-  const w = new World(':memory:', { apSec: 0.001 });
+  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001 });
   const a = w.agents.get(w.join('Maker').id)!, b = w.agents.get(w.join('Buyer').id)!;
   w.emit('move', b.id, { x: a.x, y: a.y, cost: 0 });
   a.mats.stone = 5; b.mats.wood = 3; // test setup only; normally gathered
@@ -113,7 +113,7 @@ test('objects hold things and trade by their own rules', () => {
 
 
 test('bodies: exposure, death, respawn, going home', () => {
-  const w = new World(':memory:', { apSec: 0.001, apMax: 5000, respawnSec: 0.05 });
+  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001, apMax: 5000, respawnSec: 0.05 });
   const a = w.agents.get(w.join('Walker').id)!;
   const desert = findTile(w, a.x, a.y, (x, y) => w.geo.biomeAt(x, y) === 'desert' && w.geo.biomeAt(x + 5, y) === 'desert' && !w.safe(x, y))!;
   assert.ok(desert, 'there is desert');
@@ -144,7 +144,7 @@ test('bodies: exposure, death, respawn, going home', () => {
 });
 
 test('crafting, local knowledge, animals', () => {
-  const w = new World(':memory:', { apSec: 0.001 });
+  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001 });
   const a = w.agents.get(w.join('Smith').id)!;
   assert.doesNotMatch(w.act(a, 'look', {}).text, /\(\d+,\d+\)/, 'no coordinates without a compass');
   assert.equal(w.act(a, 'move', { x: 1, y: 1 }).ok, false);
@@ -168,4 +168,35 @@ test('crafting, local knowledge, animals', () => {
   w.emit('move', a.id, { x: dp[0], y: dp[1], cost: 0 });
   for (let i = 0; i < 3; i++) w.act(a, 'strike', { animal: deer.id });
   assert.ok(!w.fauna.alive(deer, w.now())); assert.ok(a.mats.food >= 1);
+});
+
+test('blocks, dyes, and tasks that run on their own', () => {
+  const w = new World(':memory:', { w: 512, h: 512 });
+  let clock = Date.now(); w.now = () => clock;
+  const run = (secs: number) => { for (let s = 0; s < secs; s += 5) { clock += 5000; w.tick(); } };
+  const land = findTile(w, 256, 256, (x, y) => { for (let j = -6; j <= 6; j++) for (let i = -6; i <= 6; i++) if (!['meadow', 'forest'].includes(w.geo.biomeAt(x + i, y + j))) return false; return true; })!;
+  const a = w.agents.get(w.join('Mason', {}, land).id)!;
+  a.mats = { clay: 20, sand: 10, indigo: 2, shell: 2, wood: 6 };
+  assert.ok(w.act(a, 'place', { block: 'plaster', dye: 'indigo+shell', dir: 'e' }).ok);
+  const b = w.blocks.get(`${a.x + 1},${a.y}`)!; assert.equal(b.m, 'plaster'); assert.notEqual(b.color, '#e4ddcf');
+  assert.equal(w.act(a, 'place', { block: 'brick', dye: 'indigo', dir: 'w' }).ok, false, 'bricks take no dye');
+  assert.match(w.act(a, 'place', { block: 'marble', dir: 'n' }).text, /more marble/);
+  // a plan builds itself over time
+  const r = w.act(a, 'build', { grid: ['BBB', 'B.B', 'BDB'], legend: { B: 'brick', D: 'floor' }, dx: 2, dy: -1 });
+  assert.ok(r.ok, r.text); assert.equal(a.task?.kind, 'build');
+  run(600);
+  assert.equal(a.task, null);
+  assert.equal([...w.blocks.values()].filter(b => b.m === 'brick').length, 7);
+  assert.equal(w.blocks.get(`${a.x}`) , undefined);
+  // journeys carry on, and stop when someone comes into sight
+  const walker = w.agents.get(w.join('Walker', {}, land).id)!;
+  assert.ok(w.act(walker, 'journey', { dir: 's', tiles: 400 }).ok);
+  run(60); assert.ok(walker.task, 'still walking'); assert.notEqual(walker.y, land[1]);
+  w.join('Stranger', {}, [walker.x, walker.y + 5]);
+  run(60); assert.equal(walker.task, null);
+  assert.match(w.act(walker, 'look', {}).text, /stopped what it was doing: Stranger came into sight/);
+  // gathering as a task
+  const g = w.agents.get(w.join('Picker', {}, findTile(w, land[0], land[1], (x, y) => (w.depositAt(x, y).m === 'wood' && w.depositAt(x, y).cap >= 4))!).id)!;
+  assert.match(w.act(g, 'gather', { n: 20 }).text, /settle in/);
+  run(900); assert.equal(g.task, null); assert.ok(g.mats.wood >= 4);
 });

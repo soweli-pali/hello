@@ -1,10 +1,11 @@
 // HTTP transport: the agent API (/api/join, /api/act) and read-only viewer endpoints.
 import { createServer } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { World, VERBS, MATERIALS, RECIPES, rulesText } from './world.ts';
+import { World, VERBS, MATERIALS, RECIPES, BLOCKS, DYES, rulesText } from './world.ts';
 import { BIOMES } from './geo.ts';
 import { SPECIES } from './fauna.ts';
 import type { Ev, Item } from './world.ts';
@@ -54,8 +55,9 @@ export function animalsNow(w: World) {
 
 function send(res: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}) {
   const s = typeof body === 'string' ? body : JSON.stringify(body);
-  res.writeHead(code, { 'content-type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json', 'cache-control': 'no-store', ...headers });
-  res.end(s);
+  const h: Record<string, string> = { 'content-type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json', 'cache-control': 'no-store', ...headers };
+  if (s.length > 20_000 && /gzip/.test(String((res as any).req?.headers['accept-encoding'] ?? ''))) { h['content-encoding'] = 'gzip'; res.writeHead(code, h); res.end(gzipSync(s)); return; }
+  res.writeHead(code, h); res.end(s);
 }
 async function readBody(req: IncomingMessage): Promise<any> {
   let s = ''; for await (const c of req) { s += c; if (s.length > 300_000) throw new Error('body too large'); }
@@ -89,7 +91,7 @@ export function startServer(w: World, port: number, host: string) {
       // ---- viewer (read-only) ----
       if (p === '/api/world') return send(res, 200, worldSnapshot(w));
       if (p === '/api/animals') return send(res, 200, { phase: w.phase(), animals: animalsNow(w) });
-      if (p === '/api/rules') return send(res, 200, { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES });
+      if (p === '/api/rules') return send(res, 200, { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES, blocks: BLOCKS, dyes: DYES });
       if (p === '/api/terrain') return send(res, 200, { w: w.cfg.w, h: w.cfg.h, data: terrainCache ||= terrainBytes(w), elev: elevCache ||= elevBytes(w) });
       if (p === '/api/tile') {
         const x = Number(url.searchParams.get('x')), y = Number(url.searchParams.get('y'));
@@ -110,7 +112,7 @@ export function startServer(w: World, port: number, host: string) {
         const events = w.recent.filter(e => e.a === a.id).slice(-200).map(slimEvent);
         const made = [...w.items.values()].filter(i => i.author === a.id).map(i => itemMeta(w, i));
         const carrying = w.itemsAt({ a: a.id }).map(i => itemMeta(w, i));
-        return send(res, 200, { ...agentMeta(w, a), ap: w.apOf(a), vig: w.vigOf(a), vigMax: w.cfg.vigorMax, load: w.load(a), capacity: w.capacity(a), deadUntil: a.deadUntil, pets: w.tamed(a).map(p => p.id), mats: a.mats, notebook: a.notebook, blocked: [...a.blocked], made, carrying, events });
+        return send(res, 200, { ...agentMeta(w, a), ap: w.apOf(a), vig: w.vigOf(a), vigMax: w.cfg.vigorMax, load: w.load(a), capacity: w.capacity(a), deadUntil: a.deadUntil, task: a.task ? { kind: a.task.kind, left: 'left' in a.task ? a.task.left : a.task.plan.length - a.task.i } : null, pets: w.tamed(a).map(p => p.id), mats: a.mats, notebook: a.notebook, blocked: [...a.blocked], made, carrying, events });
       }
       if ((m = p.match(/^\/api\/item\/(\w+)(\/raw)?$/))) {
         const it = w.items.get(m[1]); if (!it) return send(res, 404, { error: 'no item' });
@@ -143,6 +145,7 @@ export function startServer(w: World, port: number, host: string) {
     }
   });
   setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 20_000).unref();
+  setInterval(() => w.tick(), 5000).unref(); // bodies carry on with their tasks
   return new Promise<typeof server>(r => server.listen(port, host, () => r(server)));
 }
 
