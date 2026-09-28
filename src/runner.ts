@@ -15,10 +15,12 @@ export interface AgentConf {
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
   at?: [number, number]; // where this body first arrives (its home); default: near the middle
+  effort?: string; plannerEffort?: string; // claude-cli thinking effort (low, medium, high, ...)
+  planner?: string; planEvery?: number; // two minds: a slower model plans every few turns, the main model acts on the plan
 }
 interface Conf { server: string; joinKey?: string; globalTokens: number; maxConcurrency: number; introFile?: string; agents: AgentConf[] }
 type Call = { verb: string; args: any };
-export type StepOut = { calls: Call[]; text: string; tokens: number };
+export type StepOut = { calls: Call[]; text: string; tokens: number; cost?: number; ms?: number };
 
 // The default introduction. It describes the world truthfully (the physics come from the server's
 // own rules text) and adds nothing the world doesn't do. Operators can add their own prompt per agent,
@@ -155,6 +157,7 @@ function claudeCli(c: AgentConf): Provider {
     // --system-prompt replaces Claude Code's own prompt; no tools, MCP or settings, so the model sees only this world.
     const args = ['-p', '--output-format', 'json', '--no-session-persistence', '--system-prompt', system + (tools ? '\n\n' + TEXT_PROTOCOL : ''), '--tools', '', '--strict-mcp-config', '--setting-sources', ''];
     if (c.model) args.push('--model', c.model);
+    if (c.effort) args.push('--effort', c.effort);
     // run from a neutral directory with no session files, so agents never touch any Claude Code project on this machine
     const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env: cleanEnv(), cwd: agentDir() });
     let out = '', err = '';
@@ -164,7 +167,8 @@ function claudeCli(c: AgentConf): Provider {
       try {
         const j = JSON.parse(out); const text = String(j.result ?? '');
         const u = j.usage ?? {};
-        resolve({ calls: tools ? parseCalls(text) : [], text, tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) / 10 });
+        if (j.is_error) return reject(new Error(`claude -p: ${text.slice(0, 300)}`));
+        resolve({ calls: tools ? parseCalls(text) : [], text, tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) / 10, cost: Number(j.total_cost_usd ?? 0), ms: Number(j.duration_ms ?? 0) });
       } catch { reject(new Error(`claude -p exited ${code}: ${(err || out).slice(0, 300)}`)); }
     });
     p.stdin.end(user);
@@ -243,6 +247,9 @@ export function turnPrompt(notebook: string, m: { summary: string; recent: strin
     'What would you like to do next, if anything?',
   ].filter(Boolean).join('\n\n');
 }
+// Two minds in one body: the planner steps back every few turns; the actor carries the plan out turn by turn.
+export const PLAN_NOTE = `\n\nYou have two minds. A slower, deeper one steps back every so often and writes a plan; a quicker one (this one, unless asked to plan) acts on it turn by turn. The plan is advice from yourself, not an order: if it stops fitting what you see, act sensibly and add the line {"verb":"replan","args":{"why":"..."}} so your deeper mind thinks again.`;
+export const planAsk = (every: number, plan: string) => `${plan ? `\n\n[Your current plan]\n${plan}` : ''}\n\nInstead of acting now, step back and think as your slower, deeper mind. Your quicker mind acts about every 3 minutes of world time and will follow what you write until you plan again in roughly ${every} turns. Write two parts. "Summary:" under 120 words: what has happened to you and what you have learned that matters. "Plan:" under 200 words: what you are aiming for and why, concrete next steps, where things are, what to watch for, and when to drop the plan.`;
 export const SUMMARY_ASK = '\n\nInstead of acting now: write a brief summary (under 150 words) of what has happened to you and anything you want to carry forward. It replaces your previous summary.';
 
 // ---------- the loop ----------

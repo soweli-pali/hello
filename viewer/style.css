@@ -40,7 +40,10 @@ body.mm #ticker { bottom: 140px; }
 #timebar { position: fixed; left: 12px; right: 64px; bottom: 12px; display: flex; gap: 8px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; z-index: 3; backdrop-filter: blur(10px); }
 #timebar[hidden] { display: none; }
 #tslider { flex: 1; accent-color: var(--accent); }
-#tlabel { font-size: 12px; color: var(--dim); min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+#tlabel { font-size: 12px; color: var(--dim); min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; }
+#tspeed, #tfollow { font: inherit; font-size: 12px; background: transparent; color: var(--fg, #e8ece6); border: 1px solid var(--line); border-radius: 8px; padding: 3px 6px; }
+#tfollow option { color: #111; }
+@media (max-width: 600px) { #timebar { flex-wrap: wrap; right: 12px; } #tslider { flex-basis: 100%; order: 5; } #tlabel { min-width: 0; flex: 1; text-align: left; } }
 #panel { position: fixed; z-index: 5; background: var(--panel); border: 1px solid var(--line); overflow-y: auto; -webkit-overflow-scrolling: touch; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   left: 0; right: 0; bottom: 0; max-height: 62vh; border-radius: 18px 18px 0 0; padding: 16px 18px 24px; padding-bottom: max(24px, env(safe-area-inset-bottom)); box-shadow: 0 -10px 40px #000a;
   animation: rise .25s ease-out; }

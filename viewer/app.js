@@ -297,6 +297,7 @@ function draw() {
 function phase(t = worldNow()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
 function darkness() { const p = phase(); return p >= 0.75 ? 0.5 : p > 0.62 ? (p - 0.62) / 0.13 * 0.5 : p < 0.06 ? (0.06 - p) / 0.06 * 0.5 : 0; }
 async function pollAnimals() {
+  if (S.time) return;
   try {
     const r = await api('/api/animals'), seen = new Set();
     for (const an of r.animals) { seen.add(an.id); const o = S.animals.get(an.id); if (o) Object.assign(o, an); else S.animals.set(an.id, { ...an, dx: an.x, dy: an.y }); }
@@ -366,7 +367,7 @@ function stream() {
   const es = new EventSource('/api/stream');
   es.onopen = () => $('#live').classList.add('on');
   es.onerror = () => $('#live').classList.remove('on');
-  es.onmessage = m => { const e = JSON.parse(m.data); if (e.seq <= S.seq) return; S.seq = e.seq; applyEvent(e); feedAdd(e); stats(); };
+  es.onmessage = m => { const e = JSON.parse(m.data); if (e.seq <= S.seq) return; S.seq = e.seq; if (S.time) { (R.pending ??= []).push(e); return; } applyEvent(e); feedAdd(e); stats(); };
 }
 function applyEvent(e) {
   const a = e.a && S.agents.get(e.a);
@@ -658,29 +659,68 @@ async function showLog() {
     h('div', {}, ...ev.reverse().map(e => h('div', { class: 'ev', text: JSON.stringify(e) }))));
 }
 
-// ---------------- timelapse ----------------
-let tEvents = null, tPlay = null;
+// ---------------- replay ----------------
+// The whole history, scrubbable: bodies walk, blocks and roofs rise, words hang in the air a while, night falls.
+const R = { ev: null, cps: [], i: 0, t: 0, t0: 0, t1: 0, play: null, speed: 600, follow: null, live: null };
+const SPEEDS = [[60, '1 min/s'], [600, '10 min/s'], [3600, '1 h/s']];
+const RTYPES = new Set(['join', 'move', 'wake', 'home', 'die', 'leave', 'rest', 'place', 'build', 'remove', 'say', 'make', 'craft', 'tame', 'strike', 'drop', 'hurt', 'transfer', 'gather', 'eat', 'use', 'give']);
+const cloneState = () => ({ agents: new Map([...S.agents].map(([k, a]) => [k, { ...a }])), blocks: new Map([...S.blocks].map(([k, b]) => [k, { ...b }])), roofs: new Map([...S.roofs].map(([k, b]) => [k, { ...b }])), piles: new Set(S.piles) });
+const setState = st => { S.agents = new Map([...st.agents].map(([k, a]) => [k, { ...a }])); S.blocks = new Map([...st.blocks].map(([k, b]) => [k, { ...b }])); S.roofs = new Map([...st.roofs].map(([k, b]) => [k, { ...b }])); S.piles = new Set(st.piles); };
 async function startTime() {
-  if (!tEvents) {
-    tEvents = [];
-    for (let after = 0; ;) { const b = await api(`/api/events?types=place,build,remove&after=${after}&limit=5000`); tEvents.push(...b); if (b.length < 5000 || STATIC) break; after = b.at(-1).seq; }
+  if (!R.ev) {
+    $('#tlabel').textContent = 'loading…'; $('#timebar').hidden = false;
+    const ev = [];
+    for (let after = 0; ;) { const b = await api(`/api/events?types=${[...RTYPES].join(',')}&after=${after}&limit=5000`); ev.push(...b); if (b.length < 5000 || STATIC) break; after = b.at(-1).seq; }
+    R.ev = ev.filter(e => RTYPES.has(e.type));
+    const first = R.ev.findIndex(e => e.a); for (let k = 0; k < first; k++) R.ev[k].t = R.ev[first].t; // the world's making happened just before anyone arrived
+    R.t0 = R.ev.find(e => e.a)?.t ?? 0; R.t1 = R.ev.at(-1)?.t ?? R.t0;
+    R.live = { ...cloneState(), skew: SKEW, animals: S.animals, speech: S.speech };
+    // checkpoints every 1500 events, so any moment is a short replay away
+    S.time = true; S.agents = new Map(); S.blocks = new Map(); S.roofs = new Map(); S.piles = new Set(); S.animals = new Map();
+    R.cps = [{ i: 0, ...cloneState() }];
+    for (let k = 0; k < R.ev.length; k++) { applyEvent(R.ev[k]); if ((k + 1) % 1500 === 0) R.cps.push({ i: k + 1, ...cloneState() }); }
+    const names = [...S.agents.values()].sort((a, b) => a.name.localeCompare(b.name));
+    $('#tfollow').replaceChildren(h('option', { value: '' }, 'follow…'), ...names.map(a => h('option', { value: a.id }, a.name)));
+    setState(R.cps[0]); R.i = 0;
   }
-  $('#timebar').hidden = false; const sl = $('#tslider'); sl.max = tEvents.length; sl.value = tEvents.length;
-  S.time = true; timeTo(tEvents.length);
+  $('#timebar').hidden = false; S.time = true; S.animals = new Map();
+  const sl = $('#tslider'); sl.max = Math.ceil((R.t1 - R.t0) / 60000); sl.value = 0; seek(R.t0);
+  if (!R.play) $('#tplay').click();
 }
-function timeTo(n) {
-  const blocks = new Map();
-  for (let i = 0; i < n; i++) { const e = tEvents[i], k = `${e.x},${e.y}`, b = blocks.get(k); if (e.type !== 'remove') { const st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; } else blocks.set(k, { color: e.color, m: e.m, s: st, kind: kindOf(e) }); } else if (b) { b.s -= e.dmg; if (b.s <= 0) blocks.delete(k); } }
-  rebuildBlocks(blocks);
-  const e = tEvents[n - 1]; $('#tlabel').textContent = e ? new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'the beginning';
+function seek(t) {
+  t = Math.max(R.t0, Math.min(R.t1, t));
+  let lo = 0, hi = R.ev.length; while (lo < hi) { const m = (lo + hi) >> 1; if (R.ev[m].t <= t) lo = m + 1; else hi = m; } // events up to and including t
+  const jump = lo < R.i || lo - R.i > 3000;
+  if (jump) { const cp = R.cps.filter(c => c.i <= lo).at(-1); setState(cp); R.i = cp.i; }
+  for (; R.i < lo; R.i++) applyEvent(R.ev[R.i]);
+  if (jump) for (const a of S.agents.values()) { a.dx = a.x; a.dy = a.y; }
+  R.t = t; SKEW = t - Date.now();
+  // words stay on screen for a few minutes of world time
+  S.speech = []; for (let k = R.i - 1; k >= 0 && R.ev[k].t > t - 240_000; k--) if (R.ev[k].type === 'say' && !S.speech.some(s => s.a === R.ev[k].a)) S.speech.push({ a: R.ev[k].a, text: R.ev[k].text, until: Infinity });
+  if (R.follow) { const a = S.agents.get(R.follow); if (a) { view.x = a.dx + 0.5; view.y = a.dy + 0.5; } }
+  const tk = $('#ticker'), lines = [];
+  for (let k = R.i - 1; k >= 0 && lines.length < 4 && R.ev[k].t > t - 3 * 3600_000; k--) { const e = R.ev[k]; if (['say', 'make', 'craft', 'die', 'tame', 'join', 'leave'].includes(e.type) || (e.type === 'strike' && e.killed)) { const d = describe(e); if (d) lines.unshift(d[0]); } }
+  if (tk.dataset.sig !== lines.join('|')) { tk.dataset.sig = lines.join('|'); tk.replaceChildren(...lines.map(l => h('div', { text: l, style: 'animation:none' }))); }
+  rebuildBlocks();
+  const min = Math.round((t - R.t0) / 60000), p = phase(t), part = p < 0.06 ? 'dawn' : p < 0.3 ? 'morning' : p < 0.5 ? 'midday' : p < 0.62 ? 'afternoon' : p < 0.75 ? 'dusk' : 'night';
+  $('#tlabel').textContent = `day ${Math.floor((t - R.t0 + 0.3 * S.cfg.dayMin * 60000) / (S.cfg.dayMin * 60000)) + 1} · ${part} · ${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+  $('#tslider').value = min; stats(); dirty = true;
 }
-$('#tslider').oninput = e => timeTo(+e.target.value);
+$('#tslider').oninput = e => { seek(R.t0 + +e.target.value * 60000); };
 $('#tplay').onclick = () => {
-  if (tPlay) { clearInterval(tPlay); tPlay = null; $('#tplay').textContent = '▶'; return; }
-  const sl = $('#tslider'); if (+sl.value >= tEvents.length) sl.value = 0; $('#tplay').textContent = '❚❚';
-  const step = Math.max(1, tEvents.length / 300 | 0);
-  tPlay = setInterval(() => { sl.value = Math.min(tEvents.length, +sl.value + step); timeTo(+sl.value); if (+sl.value >= tEvents.length) $('#tplay').click(); }, 33);
+  if (R.play) { clearInterval(R.play); R.play = null; $('#tplay').textContent = '▶'; return; }
+  if (R.t >= R.t1) seek(R.t0);
+  $('#tplay').textContent = '❚❚';
+  R.play = setInterval(() => { seek(R.t + R.speed * 50); if (R.t >= R.t1) $('#tplay').click(); }, 50);
 };
-$('#tclose').onclick = () => { if (tPlay) $('#tplay').click(); $('#timebar').hidden = true; S.time = null; tEvents = null; rebuildBlocks(); };
+$('#tspeed').onclick = () => { const k = (SPEEDS.findIndex(s => s[0] === R.speed) + 1) % SPEEDS.length; R.speed = SPEEDS[k][0]; $('#tspeed').textContent = SPEEDS[k][1]; };
+$('#tfollow').onchange = e => { R.follow = e.target.value || null; if (R.follow) { const a = S.agents.get(R.follow); if (a) focus(a.x, a.y, Math.max(view.z, 12)); } };
+$('#tclose').onclick = () => {
+  if (R.play) $('#tplay').click();
+  $('#timebar').hidden = true; S.time = null; R.follow = null;
+  if (R.live) { setState(R.live); SKEW = R.live.skew; S.animals = R.live.animals; S.speech = []; for (const e of R.pending ?? []) applyEvent(e); R.pending = []; R.ev = null; }
+  $('#ticker').replaceChildren(); rebuildBlocks(); stats();
+};
+if (/[?&]replay\b/.test(location.search) || location.hash === '#replay') addEventListener('load', () => setTimeout(startTime, 300));
 
 boot();

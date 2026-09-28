@@ -156,7 +156,8 @@ export class World {
   listeners = new Set<(e: Ev) => void>();
   now = () => Date.now();
 
-  constructor(file: string, cfg: Partial<Config> = {}) {
+  constructor(file: string, cfg: Partial<Config> = {}, now?: () => number) {
+    if (now) this.now = now; // a simulation brings its own clock, and the world's making should happen on it too
     this.db = new DatabaseSync(file);
     this.db.exec(`PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, t INTEGER, type TEXT, a TEXT, data TEXT);
