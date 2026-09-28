@@ -112,7 +112,7 @@ export function startServer(w: World, port: number, host: string) {
         const events = w.recent.filter(e => e.a === a.id).slice(-200).map(slimEvent);
         const made = [...w.items.values()].filter(i => i.author === a.id).map(i => itemMeta(w, i));
         const carrying = w.itemsAt({ a: a.id }).map(i => itemMeta(w, i));
-        return send(res, 200, { ...agentMeta(w, a), ap: w.apOf(a), vig: w.vigOf(a), vigMax: w.cfg.vigorMax, load: w.load(a), capacity: w.capacity(a), deadUntil: a.deadUntil, task: a.task ? { kind: a.task.kind, left: 'left' in a.task ? a.task.left : a.task.plan.length - a.task.i } : null, pets: w.tamed(a).map(p => p.id), mats: a.mats, notebook: a.notebook, blocked: [...a.blocked], made, carrying, events });
+        return send(res, 200, { ...agentMeta(w, a), ap: w.apOf(a), vig: w.vigOf(a), vigMax: w.cfg.vigorMax, load: w.load(a), capacity: w.capacity(a), deadUntil: a.deadUntil, pets: w.tamed(a).map(p => p.id), mats: a.mats, notebook: a.notebook, blocked: [...a.blocked], made, carrying, events });
       }
       if ((m = p.match(/^\/api\/item\/(\w+)(\/raw)?$/))) {
         const it = w.items.get(m[1]); if (!it) return send(res, 404, { error: 'no item' });
@@ -145,7 +145,6 @@ export function startServer(w: World, port: number, host: string) {
     }
   });
   setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 20_000).unref();
-  setInterval(() => w.tick(), 5000).unref(); // bodies carry on with their tasks
   return new Promise<typeof server>(r => server.listen(port, host, () => r(server)));
 }
 

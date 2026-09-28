@@ -170,10 +170,8 @@ test('crafting, local knowledge, animals', () => {
   assert.ok(!w.fauna.alive(deer, w.now())); assert.ok(a.mats.food >= 1);
 });
 
-test('blocks, dyes, and tasks that run on their own', () => {
+test('blocks and dyes', () => {
   const w = new World(':memory:', { w: 512, h: 512 });
-  let clock = Date.now(); w.now = () => clock;
-  const run = (secs: number) => { for (let s = 0; s < secs; s += 5) { clock += 5000; w.tick(); } };
   const land = findTile(w, 256, 256, (x, y) => { for (let j = -6; j <= 6; j++) for (let i = -6; i <= 6; i++) if (!['meadow', 'forest'].includes(w.geo.biomeAt(x + i, y + j))) return false; return true; })!;
   const a = w.agents.get(w.join('Mason', {}, land).id)!;
   a.mats = { clay: 20, sand: 10, indigo: 2, shell: 2, wood: 6 };
@@ -181,22 +179,7 @@ test('blocks, dyes, and tasks that run on their own', () => {
   const b = w.blocks.get(`${a.x + 1},${a.y}`)!; assert.equal(b.m, 'plaster'); assert.notEqual(b.color, '#e4ddcf');
   assert.equal(w.act(a, 'place', { block: 'brick', dye: 'indigo', dir: 'w' }).ok, false, 'bricks take no dye');
   assert.match(w.act(a, 'place', { block: 'marble', dir: 'n' }).text, /more marble/);
-  // a plan builds itself over time
-  const r = w.act(a, 'build', { grid: ['BBB', 'B.B', 'BDB'], legend: { B: 'brick', D: 'floor' }, dx: 2, dy: -1 });
-  assert.ok(r.ok, r.text); assert.equal(a.task?.kind, 'build');
-  run(600);
-  assert.equal(a.task, null);
-  assert.equal([...w.blocks.values()].filter(b => b.m === 'brick').length, 7);
-  assert.equal(w.blocks.get(`${a.x}`) , undefined);
-  // journeys carry on, and stop when someone comes into sight
-  const walker = w.agents.get(w.join('Walker', {}, land).id)!;
-  assert.ok(w.act(walker, 'journey', { dir: 's', tiles: 400 }).ok);
-  run(60); assert.ok(walker.task, 'still walking'); assert.notEqual(walker.y, land[1]);
-  w.join('Stranger', {}, [walker.x, walker.y + 5]);
-  run(60); assert.equal(walker.task, null);
-  assert.match(w.act(walker, 'look', {}).text, /stopped what it was doing: Stranger came into sight/);
-  // gathering as a task
-  const g = w.agents.get(w.join('Picker', {}, findTile(w, land[0], land[1], (x, y) => (w.depositAt(x, y).m === 'wood' && w.depositAt(x, y).cap >= 4))!).id)!;
-  assert.match(w.act(g, 'gather', { n: 20 }).text, /settle in/);
-  run(900); assert.equal(g.task, null); assert.ok(g.mats.wood >= 4);
+  assert.ok(w.act(a, 'place', { block: 'floor', dir: 's' }).ok);
+  assert.equal(w.blocks.get(`${a.x},${a.y + 1}`)!.kind, 'road', 'floors are walkable');
+  assert.equal(a.mats.indigo, 1); assert.equal(a.mats.clay, 19);
 });
