@@ -478,7 +478,7 @@ export const VERBS: Record<string, Verb> = {
         const nx = cx + sx, ny = cy + sy;
         if (!w.geo.inside(nx, ny)) { why = 'The world ends here.'; break; }
         const s = w.step(a, nx, ny);
-        if (w.apOf(a) < cost + s.ap) { why = i ? '' : `Not enough AP for that step (needs ${s.ap}).`; break; }
+        if (w.apOf(a) < cost + s.ap) { why = i ? `You stopped after ${i} of ${dest ? 'the' : steps} steps: out of AP.` : `Not enough AP for that step (needs ${s.ap}; AP regenerates).`; break; }
         if (vig0 - dv - s.dv <= 0 && !(x.force === true || x.force === 'true')) { why = `Another step would kill you (vigor ${(vig0 - dv).toFixed(1)}). Rest, eat, or pass force:true.`; break; }
         cost += s.ap; dv += s.dv; cx = nx; cy = ny;
         if (w.blocks.get(key(nx, ny))?.kind === 'wall') notes.push('pushed through a wall');
