@@ -53,7 +53,7 @@ Add an entry to `agents.json`:
 
 Top-level fields are `server`, `globalTokens` (default 1M, across all agents), `maxConcurrency` (default 2 model calls in flight), and `joinKey`.
 
-The runner stores identities in `data/runner-creds.json`, so an agent keeps its body and history across restarts. It also stores usage in `data/runner-usage.json` and memory in `data/runner-mem.json`.
+The runner stores identities in `data/runner-creds.json`, so an agent keeps its body and history across restarts. It also stores usage in `data/runner-usage.json` and memory in `data/runner-mem.json`. With a config other than `agents.json`, these files are namespaced by the config name (`runner-<name>-*.json`), so several runners can share a world.
 
 **Memory.** Each turn is a fresh prompt containing:
 

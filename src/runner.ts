@@ -38,8 +38,11 @@ function loadConf(): Conf {
   const c = JSON.parse(readFileSync(file, 'utf8'));
   return { server: 'http://127.0.0.1:7777', globalTokens: 1_000_000, maxConcurrency: 2, ...c };
 }
-const load = (f: string, d: any) => { try { return JSON.parse(readFileSync(join(DATA, f), 'utf8')); } catch { return d; } };
-const save = (f: string, v: any) => writeFileSync(join(DATA, f), JSON.stringify(v, null, 1));
+// State files are namespaced by config name, so several runners can share one data dir.
+const NS = (process.argv[2] ?? 'agents.json').replace(/^.*\//, '').replace(/\.json$/, '');
+const nsFile = (f: string) => join(DATA, NS === 'agents' ? f : f.replace(/^runner-/, `runner-${NS}-`));
+const load = (f: string, d: any) => { try { return JSON.parse(readFileSync(nsFile(f), 'utf8')); } catch { return d; } };
+const save = (f: string, v: any) => writeFileSync(nsFile(f), JSON.stringify(v, null, 1));
 
 // ---------- world client ----------
 class Client {
@@ -76,7 +79,7 @@ export function parseCalls(text: string): Call[] {
       if (inStr) { if (c === '\\') j++; else if (c === '"') inStr = false; continue; }
       if (c === '"') inStr = true; else if (c === '{') depth++;
       else if (c === '}' && --depth === 0) {
-        try { const o = JSON.parse(text.slice(i, j + 1)); if (o && typeof o.verb === 'string') { out.push({ verb: o.verb, args: o.args ?? {} }); i = j; } } catch { /* not JSON */ }
+        try { const o = JSON.parse(text.slice(i, j + 1)); if (o && typeof o.verb === 'string') { const { verb, args, ...rest } = o; out.push({ verb, args: args ?? rest }); i = j; } } catch { /* not JSON */ }
         break;
       }
     }

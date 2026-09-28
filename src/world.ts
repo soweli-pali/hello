@@ -302,7 +302,7 @@ export const VERBS: Record<string, Verb> = {
   look: {
     help: 'Observe your surroundings. Free.',
     args: { detail: '0 = short digest, 1 = with map (default), 2 = everything nearby' },
-    run: (w, a, x) => ({ ok: true, text: observe(w, a, Number(x.detail ?? 1)) }),
+    run: (w, a, x) => ({ ok: true, text: observe(w, a, detailOf(x.detail)) }),
   },
   move: {
     help: 'Walk up to 10 steps. 1 AP per step, more to push through blocks. {to:"spawn"} returns you to spawn for free, always.',
@@ -338,9 +338,14 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   gather: {
-    help: 'Collect material from the tile you stand on (2 AP per unit), or pick up an item within reach (1 AP).',
+    help: 'Collect whatever material is in the tile you stand on (2 AP per unit; see "Here:" in look), or pick up an item within reach (1 AP).',
     args: { n: 'units of material, 1-3 (default 1)', item: 'id of an item to pick up instead' },
     run: (w, a, x) => {
+      if (x.item && MATERIALS.includes(x.item)) { x = { ...x, material: x.item }; delete x.item; }
+      if (x.material && MATERIALS.includes(x.material)) {
+        const d = w.depositAt(a.x, a.y);
+        if (d.m !== x.material) throw new Error(`There is no ${x.material} under you${d.m ? ` (only ${d.m})` : ''}. You can only gather from the tile you stand on.`);
+      }
       if (x.item) {
         const it = w.resolveItem(a, x.item);
         if (!('t' in it.loc)) throw new Error(`#${it.id} is not lying on the ground.`);
@@ -353,7 +358,7 @@ export const VERBS: Record<string, Verb> = {
         return { ok: true, text: `You picked up #${it.id} "${it.title}".` };
       }
       const d = w.depositAt(a.x, a.y);
-      if (!d.m || d.amt <= 0) throw new Error(d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather here.');
+      if (!d.m || d.amt <= 0) throw new Error(d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather on this tile. Deposits show on the map as s/w/c/a.');
       const n = Math.max(1, Math.min(3, Math.trunc(x.n ?? 1), d.amt));
       w.need(a, 2 * n); w.emit('gather', a.id, { x: a.x, y: a.y, m: d.m, n, cost: 2 * n });
       return { ok: true, text: `You gathered ${n} ${d.m}. (${d.amt - n} left here.)` };
@@ -500,6 +505,12 @@ export const VERBS: Record<string, Verb> = {
 };
 
 // ---------- observations: compact text ----------
+// Models say "full", "brief", true... as often as 0/1/2; read intent rather than reject.
+function detailOf(d: unknown) {
+  const n = Number(d); if (d !== undefined && d !== '' && Number.isFinite(n)) return Math.max(0, Math.min(2, Math.round(n)));
+  const s = String(d ?? '').toLowerCase();
+  return /full|all|every|max|more|2/.test(s) ? 2 : /brief|short|digest|min|less|0/.test(s) ? 0 : 1;
+}
 export function ago(w: World, t: number) {
   const s = Math.max(0, Math.round((w.now() - t) / 1000));
   return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`;
