@@ -142,12 +142,18 @@ function openai(c: AgentConf): Provider {
     return { calls, text: m.content ?? '', tokens: (j.usage?.prompt_tokens ?? 0) + (j.usage?.completion_tokens ?? 0) };
   };
 }
+// A world agent must not inherit whatever Claude Code session launched the runner (its session id, sockets,
+// tokens for that session): pass on only what's needed to reach the model.
+function cleanEnv() {
+  const keep = /^(PATH|HOME|USER|LANG|LC_\w+|TERM|TMPDIR|SHELL|NODE_\w+|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE|ANTHROPIC_\w+|CLAUDE_CONFIG_DIR|CLAUDE_CODE_OAUTH_TOKEN|XDG_\w+)$/;
+  return Object.fromEntries(Object.entries(process.env).filter(([k]) => keep.test(k)));
+}
 function claudeCli(c: AgentConf): Provider {
   return (system, user, tools) => new Promise((resolve, reject) => {
     // --system-prompt replaces Claude Code's own prompt; no tools, MCP or settings, so the model sees only this world.
     const args = ['-p', '--output-format', 'json', '--system-prompt', system + (tools ? '\n\n' + TEXT_PROTOCOL : ''), '--tools', '', '--strict-mcp-config', '--setting-sources', ''];
     if (c.model) args.push('--model', c.model);
-    const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], env: cleanEnv() });
     let out = '', err = '';
     p.stdout.on('data', d => out += d); p.stderr.on('data', d => err += d);
     p.on('error', reject);
