@@ -270,7 +270,7 @@ export class World {
     }
   }
 
-  // Death and going home both leave a body's burden where it stood.
+  // Death leaves a body's burden where it stood. (Old worlds may also hold 'home' events, from when going home was a free jump.)
   private dropAll(a: Agent, x: number, y: number) {
     const g = this.groundAt(x, y);
     for (const [m, n] of Object.entries(a.mats)) if (n > 0) g[m] = (g[m] ?? 0) + n;
@@ -612,13 +612,9 @@ export const VERBS: Record<string, Verb> = {
       : { ok: true, text: observe(w, a, detailOf(x.detail)) },
   },
   move: {
-    help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear. {to:"home"} always works and is free, but you arrive with nothing: all you carry is left where you stood.',
-    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or "home", or an offset like "4S 3E", or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', to: '"home" (where you first arrived)', force: 'true to keep walking even if a step would kill you' },
+    help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear.',
+    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or "home", or an offset like "4S 3E", or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', force: 'true to keep walking even if a step would kill you' },
     run: (w, a, x) => {
-      if (x.to === 'spawn' || x.to === 'home') {
-        const s = w.homeSpot(a); w.emit('home', a.id, { from: [a.x, a.y], ...s });
-        return { ok: true, text: `You are back home, empty-handed. What you carried lies where you were.` };
-      }
       let dest: [number, number] | null = null, dx = 0, dy = 0, steps = 10;
       if (x.dir) { const d = DIRS[String(x.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); [dx, dy] = d; steps = Math.max(1, Math.min(10, Math.trunc(x.steps ?? 1))); }
       else if (x.toward) {
@@ -632,7 +628,7 @@ export const VERBS: Record<string, Verb> = {
           dest = [p[0], p[1]];
         }
       } else if (x.x !== undefined && x.y !== undefined) dest = w.target(a, x);
-      else throw new Error('move needs dir (+steps), toward, or to:"home"');
+      else throw new Error('move needs dir (+steps), toward, or x and y');
       let cx = a.x, cy = a.y, cost = 0, dv = 0; const notes: string[] = []; let why = '';
       const vig0 = w.vigOf(a), path: { x: number; y: number; ap: number; dv: number }[] = [];
       for (let i = 0; i < steps; i++) {
@@ -935,7 +931,7 @@ export function rulesText(cfg: Config) {
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
     `- Building needs only materials, no tools. A closed room (walls and doors all round, with a roof over every tile inside) is shelter: wolves can't reach you there, and you recover vigor three times as fast. By a burning campfire you recover twice as fast and wolves keep away.`,
     `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks (marble, iron) take two to lift.`,
-    `- move {"to":"home"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
+    `- There is no quick way to travel: every tile is walked (or swum, or sailed). Wherever you are, you have to get back on your own feet.`,
     `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
     `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less.`,
   ].join('\n');

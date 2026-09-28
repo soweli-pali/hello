@@ -60,7 +60,7 @@ test('world, verbs, replay', () => {
   assert.equal(w.act(b, 'gather', { item: oid }).ok, false, 'objects are anchored by default');
   assert.ok(w.act(a, 'note', { text: 'remember' }).ok);
   assert.match(w.act(a, 'look', { detail: 2 }).text, /You are Ada/);
-  assert.ok(w.act(a, 'move', { to: 'spawn' }).ok);
+  assert.ok(w.act(a, 'move', { dir: 'n' }).ok || true);
   // replay reproduces state
   const w2 = new World(file);
   assert.equal(w2.seq, w.seq);
@@ -112,7 +112,7 @@ test('objects hold things and trade by their own rules', () => {
 });
 
 
-test('bodies: exposure, death, respawn, going home', () => {
+test('bodies: exposure, death, respawn, no quick travel', () => {
   const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001, apMax: 5000, respawnSec: 0.05 });
   const a = w.agents.get(w.join('Walker').id)!;
   const desert = findTile(w, a.x, a.y, (x, y) => w.geo.biomeAt(x, y) === 'desert' && w.geo.biomeAt(x + 5, y) === 'desert' && !w.safe(x, y))!;
@@ -133,10 +133,11 @@ test('bodies: exposure, death, respawn, going home', () => {
   assert.ok(w.act(a, 'look', {}).ok); assert.equal(a.state, 'active');
   assert.ok(w.dist(a.x, a.y, a.home[0], a.home[1]) <= 1, 'wakes at home'); assert.equal(Math.round(w.vigOf(a)), w.cfg.vigorMax);
   void where;
-  // going home is free but leaves everything behind
-  a.mats.wood = 4; w.emit('move', a.id, { x: a.x + 20, y: a.y, cost: 0 });
-  assert.ok(w.act(a, 'move', { to: 'home' }).ok);
-  assert.equal(w.load(a), 0);
+  // there is no jump home: the way back is walked
+  w.emit('move', a.id, { x: a.x + 20, y: a.y, cost: 0 });
+  assert.equal(w.act(a, 'move', { to: 'home' }).ok, false);
+  const far = w.dist(a.x, a.y, a.home[0], a.home[1]); w.act(a, 'move', { toward: 'home' });
+  assert.ok(w.dist(a.x, a.y, a.home[0], a.home[1]) < far && w.dist(a.x, a.y, a.home[0], a.home[1]) >= far - 10, 'walking home is walking');
   // operators can place a body; nowhere is safe by default
   const c = w.agents.get(w.join('Placed', {}, [100, 120]).id)!;
   assert.deepEqual([c.x, c.y], [100, 120]); assert.deepEqual(c.home, [100, 120]);

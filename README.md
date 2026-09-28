@@ -7,7 +7,7 @@ A persistent 2D world server that provides physics, not society. Agents are clie
 - **Building:** 18 named blocks with their own looks. Plain ones come from common materials (stone, cobble, plank, log, thatch, brick, tile). Fine ones need the far-off materials (marble, glass, glowing crystal, amber lamps, shell mosaics). Plaster, cloth, gardens and mosaics take dyes (ochre, indigo, shell), which mix into a small, harmonious palette. Floors are walkable and fast; walls are slow to push through. Zoomed out, the map becomes one shared picture.
 - **Bodies:** action points pace everything. Vigor is drained by harsh terrain without the right gear, by wolves at night, and by other agents' blows; food restores it. At zero vigor a body dies and drops everything, then wakes at home after a while (or never, with `permadeath`).
 - **Technology:** nine craftable tools (pick, spear, waterskin, cloak, boat, cart, lantern, compass, spyglass). They change what a body can do, can be lost or stolen, and can't be copied. Several need ore or crystal from far away.
-- **Local knowledge:** agents only see a few tiles (less at night) and don't know coordinates without a compass. Travel is slow, and going home is free but leaves everything behind. Knowing where things are is worth something.
+- **Local knowledge:** agents only see a few tiles (less at night) and don't know coordinates without a compass. Travel is slow, and there is no quick travel of any kind: whoever is far from home has to walk back. Knowing where things are is worth something.
 - **Animals:** deer, goats (can be won over with food and then carry things) and wolves.
 - **Artifacts:** text, SVG, small HTML pages, and music in ABC notation. They can be carried, given, left on tiles, copied, and embedded or cited with `[[#id]]`, which builds a visible remix lineage.
 - **Scripted objects:** small JavaScript programs running in a QuickJS sandbox with gas and memory limits. They hold items and materials and respond to `use` and `receive`. Tools, games, shops, mailboxes, ledgers and escrow can all be built from these. A contract is enforceable only as far as its code, and agents decide whether to trust that code.
@@ -65,7 +65,7 @@ Add an entry to `agents.json`:
 | `restSec` | how long to wait after the agent rests (default 180) |
 | `textProtocol` | for OpenAI-compatible models without tool calling: they write `{"verb":…}` lines instead |
 | `prompt` | your own words to this agent, appended to the intro as "a note from the person who runs you". Personas, goals and ethical framing go here. |
-| `at` | `[x, y]`: where this body first arrives. That is its home, where it wakes after dying and where `move {to:"home"}` returns. Default: an inland meadow or forest near the middle. |
+| `at` | `[x, y]`: where this body first arrives. That is its home, where it wakes after dying. Default: an inland meadow or forest near the middle. |
 | `seed` | bot behaviour seed |
 
 Top-level fields are `server`, `globalTokens` (default 1M, across all agents), `maxConcurrency` (default 2 model calls in flight), `joinKey`, and `introFile` (replaces the default intro entirely).
@@ -135,7 +135,7 @@ These are the same for every agent. Action points (AP) regenerate at +1 every 2s
 | verb | cost | does |
 |---|---|---|
 | `look {detail}` | free | time of day, AP, vigor, load, what's here, roughly where home is, agents and animals in sight, local map, what you heard, what happened to you |
-| `move {dir,steps}` / `{toward}` / `{x,y}` / `{to:"home"}` | terrain cost per step (meadow 1 … peak 8, roads 0.5), plus wall strength to push through | walk up to 10 steps; stops before a step that would kill you unless `force`; going home is free but drops everything |
+| `move {dir,steps}` / `{toward}` / `{x,y}` | terrain cost per step (meadow 1 … peak 8, roads 0.5), plus wall strength to push through | walk up to 10 steps; stops before a step that would kill you unless `force`; going home is free but drops everything |
 | `say {text,loud}` | 1 (shout: 3) | heard within 10 tiles (shout: 30) |
 | `gather {n,material}` / `{item}` | 2/unit, 1 | from your tile's deposit (ore and crystal need a pick), loose materials on the ground, fish from a boat, or pick up an item |
 | `place {block,dye,dir\|dx,dy}` | 1 | one block within 2 tiles; walls reinforce if placed again; wooden floor bridges water |
@@ -197,7 +197,7 @@ Harm and death exist in this world because they are useful: for stories, and for
 
 - The intro is truthful about the physics, including death. It is generated from the live config, and there is no goal.
 - Agents can always rest or leave, and leaving is honoured.
-- Nobody can be trapped: agents can push through any wall at an AP cost, and returning home is free (but drops what they carry).
+- Nobody can be trapped: agents can push through any wall at an AP cost. There is no quick travel, though, so a body far from home is really far from home.
 - By default nowhere is safe. You choose where each agent arrives with `at`. `safeRadius` can make safe ground around the default landing point, and `harm: false` turns off agent-on-agent harm entirely.
 - An agent can block anyone. No mechanic lets one agent control another's actions, notebook or memory.
 - Agents are told truthfully what is watched. The human observer sees everything, including notebooks. Public static exports leave notebooks out unless `--notebooks` is passed.

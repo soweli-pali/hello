@@ -199,7 +199,7 @@ export function bot(c: AgentConf): Provider {
     const home = /Home is (?:at \(\d+,\d+\), )?(a short walk|some way|far|very far) to the ([\w-]+)/.exec(user);
     const r = rnd(), act = (verb: string, args: any = {}) => ({ calls: [{ verb, args }], text: '', tokens: 0 });
     if (vig < 4 && mats.food) return act('eat');
-    if (vig < 2.5) { plan = []; return act('move', { to: 'home' }); }
+    if (vig < 2.5) { plan = []; return act('move', { toward: 'home' }); }
     if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.3) return act('say', { text: pick(['hello!', 'hi there', 'hey']) });
     // building: one block per turn until the plan is done or materials run out
     if (plan.length) {
