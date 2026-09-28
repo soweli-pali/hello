@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { World } from '../src/world.ts';
+import { World, rulesText, VERBS } from '../src/world.ts';
 import { initSandbox, runHandler } from '../src/sandbox.ts';
 import { startServer } from '../src/server.ts';
 
@@ -146,7 +146,7 @@ test('bodies: exposure, death, respawn, no quick travel', () => {
 });
 
 test('crafting, local knowledge, animals', () => {
-  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001 });
+  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001, discovery: false });
   const a = w.agents.get(w.join('Smith').id)!;
   assert.doesNotMatch(w.act(a, 'look', {}).text, /\(\d+,\d+\)/, 'no coordinates without a compass');
   assert.equal(w.act(a, 'move', { x: 1, y: 1 }).ok, false);
@@ -173,7 +173,7 @@ test('crafting, local knowledge, animals', () => {
 });
 
 test('blocks and dyes', () => {
-  const w = new World(':memory:', { w: 512, h: 512 });
+  const w = new World(':memory:', { w: 512, h: 512, discovery: false });
   const land = findTile(w, 256, 256, (x, y) => { for (let j = -6; j <= 6; j++) for (let i = -6; i <= 6; i++) if (!['meadow', 'forest'].includes(w.geo.biomeAt(x + i, y + j))) return false; return true; })!;
   const a = w.agents.get(w.join('Mason', {}, land).id)!;
   a.mats = { clay: 20, sand: 10, indigo: 2, shell: 2, wood: 6 };
@@ -241,4 +241,27 @@ test('fights are slow: strikers are winded; news is told once', () => {
   assert.match(w.act(a, 'look', {}).text, /News about how the world works/);
   assert.doesNotMatch(w.act(a, 'look', {}).text, /News about/);
   assert.doesNotMatch(w.act(b, 'look', {}).text, /News about/, 'newcomers already know');
+});
+
+test('discovery: recipes and fine blocks are learned, not given', () => {
+  const w = new World(':memory:', { w: 256, h: 256 });
+  const [x, y] = w.geo.landing();
+  const a = w.agents.get(w.join('Ann', {}, [x, y]).id)!, b = w.agents.get(w.join('Bob', {}, [x + 1, y]).id)!;
+  const intro = rulesText(w.cfg);
+  for (const secret of ['spear', 'compass', 'marble', 'ochre', 'waterskin']) assert.doesNotMatch(intro + VERBS.place.help + VERBS.craft.help, new RegExp(secret), `${secret} stays secret`);
+  a.mats = { wood: 5, stone: 5 };
+  assert.match(w.act(a, 'craft', { recipe: 'spear' }).text, /don't know/);
+  assert.match(w.act(a, 'craft', { with: { wood: 1 } }).text, /nothing comes of it/);
+  const r = w.act(a, 'craft', { with: { wood: 2, stone: 1 } });
+  assert.match(r.text, /found how to make a spear/);
+  assert.ok(w.knowsRecipe(b, 'spear'), 'Bob watched');
+  assert.ok(w.act(a, 'craft', { recipe: 'spear' }).ok, 'now known by name');
+  assert.match(w.act(a, 'look', { detail: 2 }).text, /Recipes you know: spear/);
+  // fine blocks: unknown until you hold what they need; plain ones known
+  assert.ok(w.knowsBlock(a, 'plank'));
+  assert.equal(w.knowsBlock(a, 'marble'), false);
+  a.mats.marble = 1; assert.ok(w.knowsBlock(a, 'marble'));
+  // bodies from before discovery know everything
+  const old = w.agents.get(w.join('Old', {}, [x, y + 1]).id)!; old.discovers = false;
+  assert.ok(w.knowsRecipe(old, 'compass'));
 });

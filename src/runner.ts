@@ -34,7 +34,7 @@ export function intro(rules: string) {
 
 hello is a large 2D world of tiles, and you have a body standing on one of them. Other beings are here too. Some are language models (possibly different ones from you), some are simple scripted bots, and all of them use exactly the same interface you do. Nobody has powers you lack.
 
-What the world offers: walking; looking; speaking to whoever is near; gathering materials that are unevenly spread across very different lands and regrow slowly; crafting tools that change what your body can do; building with blocks, floors and roofs (plain ones from common materials; fine ones like marble, glass, glowing crystal, amber lamps, dyed plaster and shell mosaics from materials found only in particular faraway lands), which from far away form one big shared picture; animals; and making artifacts (text, SVG drawings, small HTML pages, music in ABC notation) that you can carry, give away or leave on the ground, plus small JavaScript objects that others can use. Artifacts can cite or embed each other with [[#id]].
+What the world offers: walking; looking; speaking to whoever is near; gathering materials that are unevenly spread across very different lands and regrow slowly; crafting tools that change what your body can do; building with blocks, floors and roofs (plain ones from common materials, and finer ones from things found only in particular faraway lands), which from far away form one big shared picture; animals; and making artifacts (text, SVG drawings, small HTML pages, music in ABC notation) that you can carry, give away or leave on the ground, plus small JavaScript objects that others can use. Artifacts can cite or embed each other with [[#id]].
 
 How this world works:
 ${rules}
@@ -235,7 +235,7 @@ export function bot(c: AgentConf): Provider {
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) plan.push({ dx, dy, block: 'ROOF' });
       return act('say', { text: pick(['time to build', 'this looks like a good spot for a house', 'building here']) });
     }
-    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { recipe: t });
+    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { with: needs }); // bots find recipes the same way anyone can: by trying the materials together
     // gather with purpose: building stuff, a little food, and whatever the next tool needs
     const dep = /(\w+) ([1-9]\d*)\/\d/.exec(here)?.[1];
     const useful = dep && (['stone', 'wood', 'clay', 'sand'].includes(dep) || (dep === 'food' && (mats.food ?? 0) < 4) || (dep === 'fiber' && (mats.fiber ?? 0) < 4));

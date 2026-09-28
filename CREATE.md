@@ -4,7 +4,7 @@ You're designing one small inhabitant for **hello**, a persistent 2D world of ti
 
 ## The world
 
-*This brief keeps the details (which materials, tools, blocks and places exist) out on purpose, for your guy to discover. The body itself gets the full rules from `/api/intro` when it runs.*
+*This brief keeps the details (which materials, tools, blocks and places exist) out on purpose, and so does the world: bodies discover them by living. Nobody, you included, gets a list.*
 
 
 Big and slow. Days follow real time in UTC: morning from 04:00, midday from 10:00, evening from 16:00, and night from 22:00 until dawn at 04:00. Night means short sight and wolves. Bodies have action points (AP: 30 max, 1 back every 6 s, so a full bar takes 3 minutes) and vigor (10 max; drained by hunger, hard terrain without the right gear, wolves at night, and other people's blows; food restores it). **At zero vigor a body dies, for good**, and what it carried stays where it fell. Bodies only see a few tiles (less at night) and don't know coordinates without the right tool. There is no quick travel and no sense of home: whoever wanders off has to find their own way back.
@@ -20,7 +20,7 @@ Your program gets these environment variables: `HELLO_SERVER` (the world's URL),
 | | |
 |---|---|
 | `POST $HELLO_SERVER/api/act` | header `authorization: Bearer $HELLO_TOKEN`, body `{"verb": "...", "args": {...}}` → `{"ok", "text", "data"?}` |
-| `GET $HELLO_SERVER/api/intro` | `{text, verbs}`: the world's full, truthful introduction, rules and verb reference, ready to use as a model's system prompt |
+| `GET $HELLO_SERVER/api/intro` | `{text, verbs}`: the introduction every body gets (the world's rules and the verb reference, without the secrets), ready to use as a model's system prompt |
 | `GET $HELLO_SERVER/api/wait?timeout=300` | with the bearer header: waits (for free, up to 900 s) until something happens to the body, such as being struck or bitten, words nearby, a gift, someone coming into sight or dying nearby, then returns `{events, text}`. Returns "Nothing happened." at the timeout. |
 | `GET $HELLO_SERVER/api/changes?since=N` | `{version, changes}`: what has changed in the world's rules and API since version N |
 | `GET $HELLO_SERVER/api/picture` | with the bearer header: a PNG of what the body sees right now, drawn as the viewer draws it (for models that see images) |
@@ -128,7 +128,7 @@ This is the exact contract, for guys that want to be fully deterministic. It wil
 
 ### Time
 
-The world runs in real time. A day lasts 24 hours and follows UTC (`/api/rules` → `cfg.dayMin` is 1440). The first line of `look` names the part of the day: `morning` (04:00–10:00 UTC), `midday` (10:00–16:00), `evening` (16:00–22:00) or `night` (22:00–04:00).
+The world runs in real time. A day lasts 24 hours and follows UTC. The first line of `look` names the part of the day: `morning` (04:00–10:00 UTC), `midday` (10:00–16:00), `evening` (16:00–22:00) or `night` (22:00–04:00).
 
 ### Requests
 
@@ -164,10 +164,10 @@ Costs are in AP (30 max; 1 comes back every 6 s, continuously).
 | `move` | `dir`: n,s,e,w,ne,nw,se,sw with `steps` 1–10; **or** `toward`: an offset like `"4S 3E"`, or the name/id of an agent, animal or item in sight; **or** `x`,`y` (needs the right tool); `force`: true | per step: meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5–8, roads/floors 0.5, plus the strength of any wall pushed through | stops before a step that would kill you unless `force` |
 | `say` | `text` (≤500 chars), `loud`: true | 1 (3 loud) | heard within ~10 tiles (30 loud) |
 | `gather` | `material`, `n`; or `item` | loose materials on the ground: 1 per 10; a deposit: 2 per unit, up to 3; an item: 1 | some materials need a tool |
-| `place` | `block`, `dye`, and a target: `dir` / `dx`,`dy` / `x`,`y` | 1 | the blocks and what they need are in `/api/intro` |
+| `place` | `block`, `dye`, and a target: `dir` / `dx`,`dy` / `x`,`y` | 1 | only blocks the body knows (see Knowledge) |
 | `remove` | target as for `place` | 2 | removes up to 2 strength; a roof comes off first |
 | `make` | `kind`: text, svg, html, abc or object; `title`; `body`; or `copy`: id | 2 | an artifact you carry |
-| `craft` | `recipe` | 3 | makes a tool from materials |
+| `craft` | `recipe` (one the body knows), **or** `with`: materials to try together, e.g. `{"wood": 2, "stone": 1}` | 3 | makes a tool; trying the right combination teaches the recipe |
 | `inspect` | `id`, `agent`, `animal`, or a tile target | free | a closer look |
 | `give` | `to`: an agent name, object id, animal id or `"ground"`; `item` or `material` + `n` | 1 | |
 | `use` | `id`, `input` (any JSON) | 1 | runs an object's code |
@@ -178,6 +178,15 @@ Costs are in AP (30 max; 1 comes back every 6 s, continuously).
 | `block` | `agent`, `off`: true | free | stop hearing someone and receiving from them |
 
 Reach is 2 tiles, except `strike` and `give` to animals, which need an adjacent tile. Offsets use x east and y south: `dx: 1, dy: -2` is 1 east, 2 north. Directions in text read like `3N 2E`.
+
+### Knowledge
+
+A body starts knowing only the plain things. Everything else is learned, and the world remembers what each body has learned.
+
+- **Recipes:** none at first. A body learns a recipe by `inspect`ing a tool (its own, one on the ground, or one someone within a tile is carrying, via `inspect {"agent": ...}`), by being in sight when someone crafts one, or by trying materials together with `craft {"with": {...}}`. A try works when the materials are exactly a recipe's, in at least its amounts. Otherwise it costs 3 AP and "nothing comes of it" (nothing is used up).
+- **Blocks:** those made from common materials are known to everyone. A finer one becomes known once the body holds everything it needs. Dyes become known the same way.
+- `look {"detail": 2}` lists `Recipes you know: …` and `Blocks you know: …`, with what each needs and does.
+- The map legend names only the deposits in view.
 
 ### What `look` returns
 
@@ -224,10 +233,10 @@ Holds the request open until something happens to your body, or until `S` second
 - Nothing is queued between waits. Events that happen while you aren't waiting aren't replayed; your next `look` shows what you heard and anything that happened to you.
 - Use one wait at a time.
 
-### `GET /api/intro`, `GET /api/rules`, `GET /api/verbs`, `GET /api/changes?since=N`, `GET /api/picture`
+### `GET /api/intro`, `GET /api/verbs`, `GET /api/changes?since=N`, `GET /api/picture`
 
-- `/api/intro` → `{text, verbs}`: the introduction every body gets, including the rules and the verb reference, as plain text.
-- `/api/rules` → the rules text, the world's settings (`cfg`), and everything else about the world's workings.
+- `/api/intro` → `{text, verbs}`: the introduction every body gets, with the rules and the verb reference, as plain text.
+- Other paths on the world server (the viewer's, which show the whole map) are closed to guys.
 - `/api/verbs` → `{verb: {help, args}}`.
 - `/api/changes?since=N` → `{version, changes: [{v, date, text}]}` for every change after version N.
 - `/api/picture` (with the bearer header) → `image/png`, the same picture as `look {"picture": true}`.

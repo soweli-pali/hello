@@ -54,6 +54,7 @@ export const BLOCKS: Record<string, BlockType> = {
   skylight:  { needs: { sand: 2, wood: 1 }, s: 1, roof: true, color: '#cfe8ee', words: 'glass skylight roof' },
 };
 export const FIRE_MS = 4 * 3600_000;
+export const COMMON = new Set(['stone', 'wood', 'clay', 'sand', 'fiber', 'food']); // what every body knows the uses of
 export const WINDED_MS = 60_000; // after striking a person, a body can't strike anyone for a minute
 export const DYES: Record<string, string> = { ochre: '#b5532f', indigo: '#2f408c', shell: '#f2eadd' };
 function hexMix(cols: string[]) {
@@ -94,6 +95,7 @@ export interface Config {
   respawnSec: number; permadeath: boolean;
   safeRadius: number;                 // nobody can be harmed this close to the default landing point (0 = nowhere is safe)
   harm: boolean;                      // whether agents can strike each other at all
+  discovery: boolean;                 // newcomers must discover recipes and fine blocks (bodies that joined before it was on know everything)
   dayMin: number;                     // real minutes per day/night cycle (1440: a real day)
   dayOffset: number;                  // where in the cycle the clock's zero falls; 5/6 with a 24h day puts dawn at 04:00 UTC
   animalRespawnMin: number;
@@ -102,7 +104,7 @@ export interface Config {
 // Tuned for a world that runs for days or weeks: big, slow, with journeys that take hours.
 export const DEFAULTS: Config = {
   w: 1024, h: 1024, seed: 7, apMax: 30, apSec: 6, regenSec: 900, see: 6, hear: 10, reach: 2,
-  vigorMax: 10, vigorSec: 240, carry: 40, respawnSec: 1800, permadeath: true, safeRadius: 0, harm: true,
+  vigorMax: 10, vigorSec: 240, carry: 40, respawnSec: 1800, permadeath: true, safeRadius: 0, harm: true, discovery: true,
   dayMin: 1440, dayOffset: 5 / 6, animalRespawnMin: 120, ruins: 14,
 };
 
@@ -111,7 +113,7 @@ export interface Agent {
   id: string; name: string; x: number; y: number;
   ap: number; apT: number; vig: number; vigT: number; mats: Record<string, number>;
   notebook: string; blocked: Set<string>; state: 'active' | 'resting' | 'left' | 'dead';
-  deadUntil: number; lastBite: number; lastSwing?: number; noticed?: number; deaths: number; home: [number, number];
+  deadUntil: number; lastBite: number; lastSwing?: number; noticed?: number; discovers?: boolean; knows?: Set<string>; deaths: number; home: [number, number];
   joined: number; lastSeen: number; meta: Record<string, unknown>;
   hearCursor: number; // in-memory only: last event seq this agent has been shown
 }
@@ -205,7 +207,7 @@ export class World {
     switch (e.type) {
       case 'join': {
         const a: Agent = { id: e.a!, name: e.name, x: e.x, y: e.y, ap: this.cfg.apMax, apT: e.t, vig: this.cfg.vigorMax, vigT: e.t, mats: {},
-          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
+          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq, discovers: !!e.discover, knows: new Set() };
         this.agents.set(a.id, a); this.byName.set(a.name.toLowerCase(), a.id); break;
       }
       case 'move': ag!.x = e.x; ag!.y = e.y; break;
@@ -258,6 +260,7 @@ export class World {
         break;
       }
       case 'notice': ag!.noticed = e.v; break;
+      case 'learn': ag!.knows!.add(e.what); break;
       case 'hurt': ag!.lastBite = e.cause === 'wolf' ? e.t : ag!.lastBite; break;
       case 'tame': { const an = this.fauna.byId.get(e.animal)!; an.tamedBy = e.a!; ag!.mats.food -= 1; break; }
       case 'die': {
@@ -432,7 +435,7 @@ export class World {
     const id = 'a' + (this.seq + 1);
     if (at && !(this.geo.inside(at[0], at[1]))) throw new Error('that place is outside the world');
     if (meta.look !== undefined) meta = { ...meta, look: (globalThis as any).Critters.clean(meta.look) }; // how the body looks: see /api/rules looks
-    const e = this.emit('join', id, { name, ...(at ? this.roomNear(Math.trunc(at[0]), Math.trunc(at[1])) : this.spawnSpot()), meta });
+    const e = this.emit('join', id, { name, ...(at ? this.roomNear(Math.trunc(at[0]), Math.trunc(at[1])) : this.spawnSpot()), meta, discover: this.cfg.discovery || undefined });
     return { id: e.a!, token: this.issueToken(e.a!) };
   }
   spawnSpot(): { x: number; y: number } { const [sx, sy] = this.spawn(); return this.roomNear(sx + Math.floor(Math.random() * 5) - 2, sy + Math.floor(Math.random() * 5) - 2); }
@@ -492,7 +495,7 @@ export class World {
     if (args.dir) { const d = DIRS[String(args.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); return [a.x + d[0], a.y + d[1]]; }
     if (args.dx !== undefined || args.dy !== undefined) return [a.x + Math.trunc(args.dx ?? 0), a.y + Math.trunc(args.dy ?? 0)];
     if (args.x !== undefined && args.y !== undefined) {
-      if (!this.has(a, 'compass')) throw new Error('Without a compass you do not know coordinates. Use dir, or dx/dy (east/south positive).');
+      if (!this.has(a, 'compass')) throw new Error('Without the right tool you do not know coordinates. Use dir, or dx/dy (east/south positive).');
       return [Math.trunc(args.x), Math.trunc(args.y)];
     }
     return [a.x, a.y];
@@ -519,11 +522,25 @@ export class World {
     return best ? ` The nearest ${m ?? 'deposit'} you can see is ${rel(a, best[0], best[1])}.` : m ? ` You can't see any ${m} from here.` : '';
   }
 
+  // ---------- knowledge: what a body knows how to make ----------
+  knowsRecipe(a: Agent, r: string) { return !a.discovers || a.knows!.has('recipe:' + r); }
+  // plain blocks (from common materials) everyone knows; a fine one becomes clear once you hold what it needs
+  knowsBlock(a: Agent, b: string) {
+    const bt = BLOCKS[b]; if (!bt) return false;
+    if (!a.discovers || a.knows!.has('block:' + b) || Object.keys(bt.needs).every(m => COMMON.has(m))) return true;
+    if (Object.entries(bt.needs).every(([m, n]) => (a.mats[m] ?? 0) >= (n ?? 1))) { this.learn(a, 'block:' + b); return true; }
+    return false;
+  }
+  knowsDye(a: Agent, d: string) { return !a.discovers || a.knows!.has('dye:' + d) || ((a.mats[d] ?? 0) > 0 && (this.learn(a, 'dye:' + d), true)); }
+  learn(a: Agent, what: string) { if (a.discovers && !a.knows!.has(what)) { this.emit('learn', a.id, { what }); return true; } return false; }
+  recipeText(r: string) { const R = RECIPES[r]; return `${r} (${Object.entries(R.needs).map(([m, n]) => `${n} ${m}`).join(', ')}): ${R.does}`; }
+  blockText(k: string) { const b = BLOCKS[k]; return `${k} (${Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ')}${b.floor ? ', floor' : ''}${b.roof ? ', roof' : ''}${b.door ? ', door' : ''}${b.fence ? ', fence' : ''}${b.dye ? ', takes dye' : ''}${b.glow ? ', glows' : ''}${b.heavy ? ', heavy' : ''}${b.fire ? ', fire' : ''})`; }
+
   placeBlock(a: Agent, type: string, dyeArg: unknown, tx: number, ty: number): Result {
     const bt = BLOCKS[String(type ?? '')];
-    if (!bt) throw new Error(`block must be one of ${Object.keys(BLOCKS).join(', ')}`);
+    if (!bt || !this.knowsBlock(a, String(type))) throw new Error(`You don't know a block called "${type}". Blocks you know: ${Object.keys(BLOCKS).filter(k => this.knowsBlock(a, k)).join(', ')}.`);
     const dye = (Array.isArray(dyeArg) ? dyeArg : dyeArg ? String(dyeArg).split(/[+,\s]+/) : []).map(String).filter(Boolean);
-    for (const d of dye) if (!DYES[d]) throw new Error(`dyes are ${Object.keys(DYES).join(', ')}`);
+    for (const d of dye) if (!DYES[d] || !this.knowsDye(a, d)) throw new Error(`You don't know a dye called "${d}".`);
     if (dye.length && !bt.dye) throw new Error(`${type} can't be dyed.`);
     this.near(a, tx, ty);
     if (!this.geo.inside(tx, ty)) throw new Error('Outside the world.');
@@ -607,7 +624,7 @@ export class World {
 
 // ---------- the verbs: identical for every agent ----------
 type Verb = { help: string; args: Record<string, string>; run: (w: World, a: Agent, x: any) => Result };
-const AIM = { dir: 'adjacent direction n,s,e,w,ne,nw,se,sw', dx: 'or offset east (+) / west (-)', dy: 'and offset south (+) / north (-)', x: 'or x (needs a compass)', y: 'and y (needs a compass)' };
+const AIM = { dir: 'adjacent direction n,s,e,w,ne,nw,se,sw', dx: 'or offset east (+) / west (-)', dy: 'and offset south (+) / north (-)', x: 'or x (needs the right tool)', y: 'and y (needs the right tool)' };
 export const VERBS: Record<string, Verb> = {
   look: {
     help: 'Observe your surroundings. Free.',
@@ -714,8 +731,8 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   place: {
-    help: `Place a block within reach. Building needs only the materials, no tools. Walls are slow to push through; placing the same wall again reinforces it. Floors cost only 0.5 AP to cross, like roads; wooden floor bridges water. Roofs go on a layer above walls, floors or bare ground and must be within 3 tiles of a wall (big halls need pillars). A closed room (walls and doors all round, roofed over every tile inside) is shelter. Heavy blocks need someone else nearby to help lift. At most two people fit on one tile. Dye blocks take ochre, indigo and/or shell (1 of each; mixing makes new colours). Blocks: ${Object.entries(BLOCKS).map(([k, b]) => `${k} (${Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ')}${b.floor ? ', floor' : ''}${b.roof ? ', roof' : ''}${b.door ? ', door' : ''}${b.fence ? ', fence' : ''}${b.dye ? ', dye' : ''}${b.glow ? ', glows' : ''}${b.heavy ? ', heavy' : ''}${b.fire ? ', fire' : ''})`).join('; ')}. 1 AP.`,
-    args: { block: Object.keys(BLOCKS).join('|'), dye: 'optional: ochre, indigo, shell, or several, e.g. "ochre+shell"', ...AIM },
+    help: `Place a block within reach. Building needs only the materials, no tools. Walls are slow to push through; placing the same wall again reinforces it. Floors are quick to cross, like roads, and a wooden floor bridges water. Roofs go on a layer above walls, floors or bare ground and must be within 3 tiles of a wall (big halls need pillars). A closed room (walls and doors all round, roofed over every tile inside) is shelter. Heavy blocks need someone else nearby to help lift. At most two people fit on one tile. Some blocks take dyes. Blocks made from common materials are known to everyone; finer ones become clear once you hold what they need. look {"detail":2} lists the blocks you know. 1 AP.`,
+    args: { block: 'a block you know', dye: 'optional: a dye you have, or several joined with +', ...AIM },
     run: (w, a, x) => { const [tx, ty] = w.target(a, x); return w.placeBlock(a, x.block ?? MAT_BLOCK[x.material] ?? x.material, x.dye, tx, ty); },
   },
   remove: {
@@ -748,17 +765,33 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   craft: {
-    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. Recipes: ${Object.entries(RECIPES).map(([k, r]) => `${k} (${Object.entries(r.needs).map(([m, n]) => `${n} ${m}`).join(', ')}): ${r.does}`).join('; ')}. 3 AP.`,
-    args: { recipe: Object.keys(RECIPES).join('|') },
+    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. Newcomers know no recipes: you can learn one by examining a tool (inspect it), by watching someone make one, or by trying a combination of materials you carry with {"with": {"wood": 2, "stone": 1}}. look {"detail":2} lists the recipes you know. 3 AP.`,
+    args: { recipe: 'a recipe you know', with: 'or materials to try combining, e.g. {"wood":2,"stone":1}' },
     run: (w, a, x) => {
-      const r = RECIPES[String(x.recipe ?? '').toLowerCase()];
-      if (!r) throw new Error(`Recipes: ${Object.keys(RECIPES).join(', ')}.`);
-      const short = Object.entries(r.needs).filter(([m, n]) => (a.mats[m] ?? 0) < n!).map(([m, n]) => `${n! - (a.mats[m] ?? 0)} more ${m}`);
-      if (short.length) throw new Error(`You need ${short.join(', ')}.`);
-      w.need(a, 3);
-      const id = 'i' + (w.seq + 1), name = String(x.recipe).toLowerCase();
+      let name = String(x.recipe ?? '').toLowerCase(), invented = false;
+      if (!name && x.with && typeof x.with === 'object') {
+        const tried = Object.fromEntries(Object.entries(x.with as Record<string, unknown>).map(([m, n]) => [String(m).toLowerCase(), Math.max(0, Math.trunc(Number(n) || 0))]).filter(([, n]) => (n as number) > 0)) as Record<string, number>;
+        const short = Object.entries(tried).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} more ${m}`);
+        if (short.length) throw new Error(`You don't have that: you'd need ${short.join(', ')}.`);
+        w.need(a, 3);
+        // it works if what you try is exactly a recipe's materials in at least its amounts, and nothing else
+        const hit = Object.entries(RECIPES).find(([, r]) => Object.keys(r.needs).length === Object.keys(tried).length && Object.entries(r.needs).every(([m, n]) => (tried[m] ?? 0) >= n!));
+        if (!hit) { w.emit('tinker', a.id, { with: tried, cost: 3 }); return { ok: true, text: 'You turn the materials over and try to fit them together, but nothing comes of it.' }; }
+        name = hit[0]; invented = !w.knowsRecipe(a, name);
+        if (invented) w.learn(a, 'recipe:' + name);
+      } else if (!RECIPES[name] || !w.knowsRecipe(a, name)) {
+        const known = Object.keys(RECIPES).filter(k => w.knowsRecipe(a, k));
+        throw new Error(`You don't know how to make "${x.recipe ?? ''}". ${known.length ? `Recipes you know: ${known.join(', ')}.` : "You don't know any recipes yet."} You could try combining materials with {"with": {...}}.`);
+      } else {
+        const short = Object.entries(RECIPES[name].needs).filter(([m, n]) => (a.mats[m] ?? 0) < n!).map(([m, n]) => `${n! - (a.mats[m] ?? 0)} more ${m}`);
+        if (short.length) throw new Error(`You need ${short.join(', ')}.`);
+        w.need(a, 3);
+      }
+      const r = RECIPES[name], id = 'i' + (w.seq + 1);
       w.emit('craft', a.id, { id, kind: 'tool', title: name, body: r.does, hash: sha(name), needs: r.needs, cost: 3 });
-      return { ok: true, text: `You crafted a ${name} (#${id}): ${r.does}.`, data: { id } };
+      // anyone watching learns how it's done
+      for (const o of w.agents.values()) if (o.id !== a.id && o.state === 'active' && w.dist(o.x, o.y, a.x, a.y) <= w.sight(o) && !w.knowsRecipe(o, name)) w.learn(o, 'recipe:' + name);
+      return { ok: true, text: `${invented ? `It works! You've found how to make a ${name}. ` : ''}You crafted a ${name} (#${id}): ${r.does}.`, data: { id } };
     },
   },
   inspect: {
@@ -774,6 +807,7 @@ export const VERBS: Record<string, Verb> = {
           const inside = w.itemsAt({ o: it.id });
           s += `\n---\nholds: ${fmtMats(it.mats!) || 'no materials'}${inside.length ? '; ' + inside.map(i => `#${i.id} "${i.title}"`).join(', ') : ''}\nstate: ${clampStr(JSON.stringify(it.state), 2000)}`;
         }
+        if (it.kind === 'tool' && RECIPES[it.title] && w.learn(a, 'recipe:' + it.title)) s += `\n---\nLooking it over, you see how it is made: ${w.recipeText(it.title)}.`;
         return { ok: true, text: s };
       }
       if (x.animal) {
@@ -787,7 +821,8 @@ export const VERBS: Record<string, Verb> = {
         const seen = w.dist(a.x, a.y, b.x, b.y) <= w.sight(a);
         const made = [...w.items.values()].filter(i => i.author === b.id).slice(-15);
         const carried = seen ? w.itemsAt({ a: b.id }).filter(i => i.kind === 'tool').map(i => i.title) : [];
-        return { ok: true, text: `${b.name} (${b.state})${seen ? `, ${rel(a, b.x, b.y)}${carried.length ? `, carrying ${carried.join(', ')}` : ''}` : ', not in sight'}. Here since ${ago(w, b.joined)}. Made: ${made.map(i => `#${i.id} "${i.title}"`).join(', ') || 'nothing yet'}.` };
+        const learnt = w.dist(a.x, a.y, b.x, b.y) <= 1 ? carried.filter(t => RECIPES[t] && w.learn(a, 'recipe:' + t)) : []; // up close, you can see how their tools are made
+        return { ok: true, text: `${b.name} (${b.state})${seen ? `, ${rel(a, b.x, b.y)}${carried.length ? `, carrying ${carried.join(', ')}` : ''}` : ', not in sight'}. Here since ${ago(w, b.joined)}. Made: ${made.map(i => `#${i.id} "${i.title}"`).join(', ') || 'nothing yet'}.${learnt.length ? ` Up close you see how their ${learnt.join(' and ')} ${learnt.length > 1 ? 'are' : 'is'} made: ${learnt.map(t => w.recipeText(t)).join('; ')}.` : ''}` };
       }
       const [tx, ty] = w.target(a, x);
       if (w.dist(a.x, a.y, tx, ty) > w.sight(a)) throw new Error("You can't see that far.");
@@ -862,7 +897,7 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   strike: {
-    help: 'Hit an adjacent agent or animal: 1 damage (3 with a spear). After striking a person you are winded: no more strikes for a minute. Killing an animal yields food and fiber. 3 AP.',
+    help: 'Hit an adjacent agent or animal: 1 damage (more with a weapon). After striking a person you are winded: no more strikes for a minute. Killing an animal yields food and fiber. 3 AP.',
     args: { agent: 'agent name', animal: 'animal id' },
     run: (w, a, x) => {
       const dmg = w.has(a, 'spear') ? 3 : 1;
@@ -933,14 +968,15 @@ export function rulesText(cfg: Config) {
     `- The land is ${cfg.w}x${cfg.h} tiles of forests, meadows, marshes, deserts, tundra, mountain ranges, rivers and sea. Travel is slow and some places are dangerous.`,
     `- Land yields a little of what it is (forest: wood, mountain: stone, desert: sand, marsh: clay, meadow: fiber); richer deposits of each, and of rarer things, lie in particular places. Gathering takes from the tile you stand on, and it regrows slowly.`,
     `- Actions cost action points (max ${cfg.apMax}, +1 every ${cfg.apSec}s). Thinking, looking and writing notes are free.`,
-    `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Deserts drain it without a waterskin, cold without a cloak, water without a boat; wolves bite at night${cfg.harm ? '; other agents can strike you (1 damage, 3 with a spear; whoever strikes a person is winded for a minute, so a fight takes minutes and you will have turns to answer, flee or plead, though several attackers together are more dangerous)' : ''}.`,
+    `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Harsh lands (deserts, cold, deep water) drain it unless you carry the right gear; wolves bite at night${cfg.harm ? '; other agents can strike you (1 damage, more with a weapon; whoever strikes a person is winded for a minute, so a fight takes minutes and you will have turns to answer, flee or plead, though several attackers together are more dangerous)' : ''}.`,
     cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
       : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at your home (where you first arrived) with nothing, remembering what you remember.`,
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
     `- Building needs only materials, no tools. A closed room (walls and doors all round, with a roof over every tile inside) is shelter: wolves can't reach you there, and you recover vigor three times as fast. By a burning campfire you recover twice as fast and wolves keep away.`,
-    `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks (marble, iron) take two to lift.`,
+    `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks take two to lift.`,
+    ...(cfg.discovery ? [`- Nobody arrives knowing how to make tools. You learn a recipe by examining a tool, by watching someone make one, or by trying combinations of materials yourself. Blocks from common materials everyone knows; finer ones become clear once you hold what they need.`] : []),
     `- There is no quick way to travel: every tile is walked (or swum, or sailed). Wherever you are, you have to get back on your own feet.`,
-    `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
+    `- You don't know coordinates unless you carry the right tool. Directions are relative: N is up, E is right.`,
     cfg.dayMin === 1440 ? `- Days follow real time in UTC: morning from ${utcHour(cfg, 0)}, midday from ${utcHour(cfg, 0.25)}, evening from ${utcHour(cfg, 0.5)}, night from ${utcHour(cfg, 0.75)} until dawn. At night you see less, and wolves roam.`
       : `- Days and nights pass (${cfg.dayMin >= 120 ? `about ${Math.round(cfg.dayMin / 60)} hours` : `${cfg.dayMin} minutes`} per cycle). At night you see less, and wolves roam.`,
   ].join('\n');
@@ -1012,7 +1048,7 @@ export function observe(w: World, a: Agent, detail = 1): string {
   if (nearest.size) out.push(`Deposits in sight: ${[...nearest].sort((p, q) => p[1][2] - q[1][2]).map(([m, [x, y]]) => `${m === 'food' ? 'food (berries)' : m} ${rel(a, x, y)}`).join('; ')}.`);
   if (nearItems.length) out.push(`Items in sight: ${nearItems.slice(0, detail >= 2 ? 50 : 10).join('; ')}.`);
   if (detail >= 1) {
-    const legend = new Map<string, string>(); let digit = 1;
+    const legend = new Map<string, string>(), shown = new Set<string>(); let digit = 1;
     const rows: string[] = [];
     for (let y = a.y - r; y <= a.y + r; y++) {
       let row = '';
@@ -1026,13 +1062,21 @@ export function observe(w: World, a: Agent, detail = 1): string {
         if (b) { row += bt?.fire ? '!' : bt?.door ? '+' : bt?.fence ? '%' : b.kind === 'road' ? (w.roofs.has(key(x, y)) ? '&' : '=') : '#'; continue; }
         if (w.roofs.has(key(x, y))) { row += '&'; continue; }
         if (w.itemsAt({ t: [x, y] }).length || fmtMats(w.ground.get(key(x, y)) ?? {})) { row += '*'; continue; }
-        const d = w.depositAt(x, y); row += d.m && d.rich && d.amt > 0 ? LETTER[d.m] : BIOME_INFO[w.geo.biomeAt(x, y)].map;
+        const d = w.depositAt(x, y); if (d.m && d.rich && d.amt > 0) { shown.add(d.m); row += LETTER[d.m]; } else row += BIOME_INFO[w.geo.biomeAt(x, y)].map;
       }
       rows.push(row);
     }
-    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, + door, % fence, ! campfire, = floor/road, & under a roof, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water; deposits S stone W wood C clay N sand F fiber B berries (food) O ore X crystal M marble R ochre I indigo H shell Y amber):`);
+    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, + door, % fence, ! campfire, = floor/road, & under a roof, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak _ beach ~ water${shown.size ? `; deposits ${[...shown].map(m => `${LETTER[m as Material]} ${m === 'food' ? 'berries (food)' : m}`).join(' ')}` : ''}):`);
     out.push(rows.join('\n'));
     if (legend.size) out.push(`Key: ${[...legend].map(([n, d]) => `${d}=${n}`).join(' ')}`);
+  }
+  if (detail >= 2 && a.discovers) {
+    const rec = Object.keys(RECIPES).filter(k => w.knowsRecipe(a, k)), blk = Object.keys(BLOCKS).filter(k => w.knowsBlock(a, k));
+    out.push(`Recipes you know: ${rec.length ? rec.map(r => w.recipeText(r)).join('; ') : 'none yet'}.`);
+    out.push(`Blocks you know: ${blk.map(b => w.blockText(b)).join('; ')}.`);
+  } else if (detail >= 2) {
+    out.push(`Recipes: ${Object.keys(RECIPES).map(r => w.recipeText(r)).join('; ')}.`);
+    out.push(`Blocks: ${Object.keys(BLOCKS).map(b => w.blockText(b)).join('; ')}.`);
   }
   // what reached you since you last looked
   const since = w.recent.filter(e => e.seq > a.hearCursor);

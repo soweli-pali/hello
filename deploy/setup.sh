@@ -119,6 +119,7 @@ mkdir -p /var/lib/hello/guys
 printf '#!/bin/sh\nexec /usr/bin/node --disable-warning=ExperimentalWarning /opt/hello/src/guy.ts "$@"\n' > /usr/local/bin/hello-guy
 chmod +x /usr/local/bin/hello-guy
 docker pull -q node:22-slim >/dev/null; docker pull -q python:3.12-slim >/dev/null
+docker restart hello-egress >/dev/null 2>&1 || true   # the guys' door picks up any new rules
 
 echo "== firewall: ssh, everything over tailscale, and the guys' door to the world"
 # public SSH only on a fresh install (once you lock it down, updates leave it locked)
