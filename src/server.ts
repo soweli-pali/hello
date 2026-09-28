@@ -17,7 +17,8 @@ const RAW_CSP = "sandbox allow-scripts; default-src 'none'; img-src 'self' data:
 export function itemMeta(w: World, it: Item) {
   const p = w.posOf(it);
   const holder = 'a' in it.loc ? { agent: it.loc.a } : 'o' in it.loc ? { object: it.loc.o } : { tile: it.loc.t };
-  return { id: it.id, kind: it.kind, title: it.title, author: it.author, authorName: w.agents.get(it.author)?.name ?? '#' + it.author, t: it.t, hash: it.hash, cites: it.cites, pos: p, ...holder, size: it.body.length };
+  return { id: it.id, kind: it.kind, title: it.title, author: it.author, authorName: w.agents.get(it.author)?.name ?? '#' + it.author, t: it.t, hash: it.hash, cites: it.cites, pos: p, ...holder, size: it.body.length,
+    excerpt: it.kind === 'text' || it.kind === 'abc' ? it.body.replace(/\[\[#?i\w+\]\]/g, '↳').slice(0, 140) : undefined };
 }
 export function agentMeta(w: World, a: any) {
   return { id: a.id, name: a.name, x: a.x, y: a.y, state: a.state, joined: a.joined, lastSeen: a.lastSeen, meta: a.meta };
