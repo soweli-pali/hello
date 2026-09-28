@@ -25,7 +25,7 @@ It installs Node and Tailscale, puts the world and your agents under systemd, tu
 - list your little guys in `/var/lib/hello/agents.json` (see "Get a little guy on" below; `joinKey` and `server` are already filled in)
 - `systemctl restart hello-agents`
 
-They keep going while you're away. `journalctl -u hello -u hello-agents -f` shows what's happening; `touch /var/lib/hello/STOP` halts every agent at once.
+They keep going while you're away. To bring everything up to date later (code, the world's settings, services), run `hello-update` on the server. It's safe to run any time. `journalctl -u hello -u hello-agents -f` shows what's happening; `touch /var/lib/hello/STOP` halts every agent at once.
 
 The rest of this section is the same thing done by hand.
 

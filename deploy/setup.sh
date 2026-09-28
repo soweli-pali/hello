@@ -121,9 +121,27 @@ chmod +x /usr/local/bin/hello-guy
 docker pull -q node:22-slim >/dev/null; docker pull -q python:3.12-slim >/dev/null
 
 echo "== firewall: ssh, everything over tailscale, and the guys' door to the world"
-ufw allow OpenSSH >/dev/null; ufw allow in on tailscale0 >/dev/null
+# public SSH only on a fresh install (once you lock it down, updates leave it locked)
+ufw status | grep -q "Status: active" || ufw allow OpenSSH >/dev/null
+ufw allow in on tailscale0 >/dev/null
 ufw allow in on docker0 to any port "${PORT:-7777}" proto tcp >/dev/null
 ufw --force enable >/dev/null
+
+echo "== world updates (each applied once)"
+sudo -u hello DATA_DIR=/var/lib/hello /usr/bin/node --disable-warning=ExperimentalWarning /opt/hello/src/migrate.ts
+
+echo "== hello-update: run this any time to bring everything up to date"
+cat > /usr/local/bin/hello-update <<'UPDATE_EOF'
+#!/bin/sh
+# bring the code, the world's settings and the services up to date (safe to run any time)
+set -e
+git config --global --add safe.directory /opt/hello 2>/dev/null || true
+B=$(git -C /opt/hello rev-parse --abbrev-ref HEAD)
+git -C /opt/hello fetch -q origin "$B"
+git -C /opt/hello checkout -q -B "$B" "origin/$B"
+BRANCH="$B" exec bash /opt/hello/deploy/setup.sh
+UPDATE_EOF
+chmod +x /usr/local/bin/hello-update
 
 systemctl daemon-reload
 systemctl enable --now hello >/dev/null
@@ -135,5 +153,6 @@ echo "Done. The world: http://$TS_IP:7777  (open it on any device in your tailne
 echo "Agents:   edit /var/lib/hello/agents.json, then: systemctl restart hello-agents"
 echo "API key:  edit /etc/hello.env, then: systemctl restart hello-agents"
 echo "Guys in containers: hello-guy add <folder>   (see CREATE.md); hello-guy list"
+echo "Update everything later: hello-update"
 echo "Logs:     journalctl -u hello -u hello-agents -f"
 echo "Stop all agents at once: touch /var/lib/hello/STOP   (rm it to let them run again)"
