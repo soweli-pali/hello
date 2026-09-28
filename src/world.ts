@@ -1,5 +1,7 @@
 // The world: physics, not society. All state changes go through emit() -> apply(),
 // and apply() is the only thing replay uses, so the event log is the source of truth.
+import '../viewer/critters.js';
+import { picture } from './picture.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 import { runHandler } from './sandbox.ts';
@@ -424,6 +426,7 @@ export class World {
     if (this.byName.has(name.toLowerCase())) throw new Error('name taken');
     const id = 'a' + (this.seq + 1);
     if (at && !(this.geo.inside(at[0], at[1]))) throw new Error('that place is outside the world');
+    if (meta.look !== undefined) meta = { ...meta, look: (globalThis as any).Critters.clean(meta.look) }; // how the body looks: see /api/rules looks
     const e = this.emit('join', id, { name, ...(at ? this.roomNear(Math.trunc(at[0]), Math.trunc(at[1])) : this.spawnSpot()), meta });
     return { id: e.a!, token: this.issueToken(e.a!) };
   }
@@ -603,8 +606,10 @@ const AIM = { dir: 'adjacent direction n,s,e,w,ne,nw,se,sw', dx: 'or offset east
 export const VERBS: Record<string, Verb> = {
   look: {
     help: 'Observe your surroundings. Free.',
-    args: { detail: '0 = short digest, 1 = with map (default), 2 = everything you can perceive' },
-    run: (w, a, x) => ({ ok: true, text: observe(w, a, detailOf(x.detail)) }),
+    args: { detail: '0 = short digest, 1 = with map (default), 2 = everything you can perceive', picture: 'true to also get a picture of what you see (a PNG, in data.png as base64)' },
+    run: (w, a, x) => x.picture === true || x.picture === 'true'
+      ? { ok: true, text: observe(w, a, detailOf(x.detail)) + '\n(A picture of what you see is attached.)', data: { png: picture(w, a).toString('base64') } }
+      : { ok: true, text: observe(w, a, detailOf(x.detail)) },
   },
   move: {
     help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear. {to:"home"} always works and is free, but you arrive with nothing: all you carry is left where you stood.',

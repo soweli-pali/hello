@@ -1,4 +1,5 @@
 // HTTP transport: the agent API (/api/join, /api/act) and read-only viewer endpoints.
+import { picture } from './picture.ts';
 import { createServer } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -54,6 +55,9 @@ export function animalsNow(w: World) {
   return w.fauna.list.filter(an => w.fauna.alive(an, t)).map(an => { const [x, y] = w.animalPos(an, t); return { id: an.id, sp: an.sp, x, y, tamedBy: an.tamedBy }; });
 }
 
+// What a joining body may choose about its looks (all optional; anything left out is picked from its name).
+const LOOKS = { species: (globalThis as any).Critters.SPECIES, mark: (globalThis as any).Critters.MARKS, colours: 'fur, belly, eyes, markColor: "#rrggbb"', worn: 'a crafted cloak is drawn over the body; nothing else is worn yet' };
+
 function send(res: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}) {
   const s = typeof body === 'string' ? body : JSON.stringify(body);
   const h: Record<string, string> = { 'content-type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json', 'cache-control': 'no-store', ...headers };
@@ -78,7 +82,7 @@ export function startServer(w: World, port: number, host: string) {
         const key = process.env.JOIN_KEY;
         if (key && req.headers['x-join-key'] !== key) return send(res, 403, { error: 'join key required' });
         const b = await readBody(req);
-        return send(res, 200, w.join(b.name, b.meta ?? {}, Array.isArray(b.at) ? [Number(b.at[0]), Number(b.at[1])] : undefined));
+        return send(res, 200, w.join(b.name, { ...(b.meta ?? {}), ...(b.look ? { look: b.look } : {}) }, Array.isArray(b.at) ? [Number(b.at[0]), Number(b.at[1])] : undefined));
       }
       if (p === '/api/act' && req.method === 'POST') {
         const a = w.auth(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
@@ -87,12 +91,17 @@ export function startServer(w: World, port: number, host: string) {
         const b = await readBody(req);
         return send(res, 200, w.act(a, b.verb, b.args ?? b));
       }
+      if (p === '/api/picture') { // what your body sees, as a PNG (for people and harnesses that prefer images)
+        const a = w.auth(String(req.headers.authorization ?? url.searchParams.get('token') ?? '').replace(/^Bearer /, ''));
+        if (!a) return send(res, 401, { ok: false, text: 'bad token' });
+        const png = picture(w, a); res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' }); return res.end(png);
+      }
       if (p === '/api/verbs') return send(res, 200, Object.fromEntries(Object.entries(VERBS).map(([k, v]) => [k, { help: v.help, args: v.args }])));
 
       // ---- viewer (read-only) ----
       if (p === '/api/world') return send(res, 200, worldSnapshot(w));
       if (p === '/api/animals') return send(res, 200, { phase: w.phase(), animals: animalsNow(w) });
-      if (p === '/api/rules') return send(res, 200, { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES, blocks: BLOCKS, dyes: DYES });
+      if (p === '/api/rules') return send(res, 200, { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES, blocks: BLOCKS, dyes: DYES, looks: LOOKS });
       if (p === '/api/terrain') return send(res, 200, { w: w.cfg.w, h: w.cfg.h, data: terrainCache ||= terrainBytes(w), elev: elevCache ||= elevBytes(w) });
       if (p === '/api/tile') {
         const x = Number(url.searchParams.get('x')), y = Number(url.searchParams.get('y'));

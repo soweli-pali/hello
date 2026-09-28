@@ -294,22 +294,7 @@ function draw() {
   }
 }
 
-// Up close, a body is a little person: a coat in their own colour, a face, sometimes a hat, hair or a scarf (chosen by name).
-function drawPerson(a, sx, sy, z) {
-  const u = z / 16, hue = hueOf(a.name), v = hueOf(a.name + '*'), P = (x, y, w, h, c) => { cx.fillStyle = c; cx.fillRect(sx + x * u, sy + y * u, w * u, h * u); };
-  cx.fillStyle = 'rgba(0,0,0,.28)'; cx.beginPath(); cx.ellipse(sx, sy + 6.5 * u, 5 * u, 1.8 * u, 0, 0, 7); cx.fill();
-  const coat = `hsl(${hue} 62% 52%)`, dark = `hsl(${hue} 55% 34%)`, skin = ['#f1c9a5', '#d9a57b', '#a8724f', '#7a4f36', '#e8b894'][v % 5];
-  P(-3.5, 6, 2.5, 1.5, '#2a2320'); P(1, 6, 2.5, 1.5, '#2a2320');                 // boots
-  P(-4.5, -1, 9, 7.5, dark); P(-4, -1, 8, 7, coat); P(-0.5, -1, 1, 7, dark);      // coat
-  P(-6, 0, 1.8, 5, coat); P(4.2, 0, 1.8, 5, coat);                               // arms
-  P(-3.5, -8, 7, 7, skin);                                                        // head
-  const hairC = ['#3b2a1e', '#6b4a2b', '#c9a15a', '#1e1a18', '#a24a2a', '#d8d2c4'][(v >> 3) % 6];
-  P(-3.8, -8.8, 7.6, 2.4, hairC); if ((v >> 5) % 2) { P(-3.8, -8, 1.3, 5, hairC); P(2.5, -8, 1.3, 5, hairC); }
-  if ((v >> 7) % 3 === 0) { P(-5, -9.5, 10, 1.4, dark); P(-3, -12.5, 6, 3.2, dark); }  // a hat
-  if ((v >> 9) % 3 === 1) P(-4, -1.6, 8, 1.6, `hsl(${(hue + 150) % 360} 60% 58%)`); // a scarf
-  if (a.state === 'resting') { P(-2.2, -4.6, 1.6, 0.5, '#2a1d18'); P(0.8, -4.6, 1.6, 0.5, '#2a1d18'); }
-  else { P(-2, -5, 1.2, 1.4, '#1d1714'); P(1, -5, 1.2, 1.4, '#1d1714'); }
-}
+function drawPerson(a, sx, sy, z) { Critters.draw(cx, { name: a.name, look: a.meta?.look, worn: (a.tools ?? []).includes('cloak') ? ['cloak'] : [], state: a.state }, sx, sy + z * 0.05, z); }
 function phase(t = worldNow()) { return (t / (S.cfg.dayMin * 60000) + 0.3) % 1; }
 function darkness() { const p = phase(); return p >= 0.75 ? 0.5 : p > 0.62 ? (p - 0.62) / 0.13 * 0.5 : p < 0.06 ? (0.06 - p) / 0.06 * 0.5 : 0; }
 async function pollAnimals() {
@@ -392,6 +377,7 @@ function applyEvent(e) {
     case 'join': S.agents.set(e.a, { id: e.a, name: e.name, x: e.x, y: e.y, dx: e.x, dy: e.y, state: 'active', meta: e.meta, joined: e.t }); break;
     case 'move': a.x = e.x; a.y = e.y; break;
     case 'place': case 'build': { const k = `${e.x},${e.y}`, L = layerOf(e.kind), b = L.get(k), st = e.kind === 'road' ? 1 : STR[e.m]; if (b) { b.s += st; b.color = e.color; if (e.m === 'fire') b.t = e.t; } else L.set(k, { color: e.color, m: e.m, s: st, kind: kindOf(e), t: e.t }); if (!S.time) paintBlock(e.x, e.y); break; }
+    case 'craft': if (a) (a.tools ??= []).push(e.title); break;
     case 'die': a.state = 'dead'; S.piles.add(`${a.x},${a.y}`); break;
     case 'wake': a.state = 'active'; a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;
     case 'home': S.piles.add(`${e.from[0]},${e.from[1]}`); a.x = e.x; a.y = e.y; a.dx = e.x; a.dy = e.y; break;

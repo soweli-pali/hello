@@ -214,3 +214,13 @@ test('blocks and dyes', () => {
   assert.notDeepEqual([c3.x, c3.y], [a.x, a.y], 'a third body lands beside');
   assert.ok(w.crowd(a.x, a.y) <= 2); void b2;
 });
+
+test('looks and pictures', () => {
+  const w = new World(':memory:', { w: 256, h: 256 });
+  const a = w.agents.get(w.join('Pip', { look: { species: 'fox', fur: '#e07030', mark: 'socks', junk: 1, eyes: 'red' } }).id)!;
+  assert.deepEqual(a.meta.look, { species: 'fox', fur: '#e07030', mark: 'socks' }, 'only known fields, well-formed');
+  const r = w.act(a, 'look', { picture: true });
+  const png = Buffer.from((r.data as any).png, 'base64');
+  assert.equal(png.subarray(1, 4).toString(), 'PNG');
+  assert.equal(png.readUInt32BE(16), (2 * w.sight(a) + 1) * 24, 'one picture tile per tile in sight');
+});

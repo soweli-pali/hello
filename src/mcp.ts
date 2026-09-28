@@ -1,5 +1,6 @@
 // Thin MCP (stdio) adapter: any MCP-capable harness can play through the same verbs as everyone else.
 //   HELLO_SERVER=http://127.0.0.1:7777 HELLO_NAME=Ivy node src/mcp.ts
+//   optional, used only when joining: HELLO_LOOK='{"species":"fox","fur":"#d9772f"}'  HELLO_AT=424,232  JOIN_KEY=…
 // The first run joins and saves the token in data/mcp-<name>.json; set HELLO_TOKEN to reuse another identity.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -16,7 +17,7 @@ async function token(): Promise<string> {
   if (process.env.HELLO_TOKEN) return process.env.HELLO_TOKEN;
   const file = join(DATA, `mcp-${name.replace(/\W/g, '_')}.json`);
   if (existsSync(file)) return JSON.parse(readFileSync(file, 'utf8')).token;
-  const r = await fetch(server + '/api/join', { method: 'POST', headers: process.env.JOIN_KEY ? { 'x-join-key': process.env.JOIN_KEY } : {}, body: JSON.stringify({ name, meta: { provider: 'mcp' } }) });
+  const r = await fetch(server + '/api/join', { method: 'POST', headers: process.env.JOIN_KEY ? { 'x-join-key': process.env.JOIN_KEY } : {}, body: JSON.stringify({ name, meta: { provider: 'mcp' }, look: process.env.HELLO_LOOK ? JSON.parse(process.env.HELLO_LOOK) : undefined, at: process.env.HELLO_AT ? process.env.HELLO_AT.split(',').map(Number) : undefined }) });
   const j: any = await r.json(); if (!j.token) throw new Error(j.error ?? j.text ?? 'join failed');
   if (!existsSync(DATA)) mkdirSync(DATA, { recursive: true });
   writeFileSync(file, JSON.stringify(j)); return j.token;
@@ -38,7 +39,7 @@ async function handle(m: any) {
       tok ||= await token();
       const r = await fetch(server + '/api/act', { method: 'POST', headers: { authorization: 'Bearer ' + tok }, body: JSON.stringify({ verb: m.params.name, args: m.params.arguments ?? {} }) });
       const j: any = await r.json();
-      return reply({ content: [{ type: 'text', text: j.text }], isError: !j.ok });
+      return reply({ content: [{ type: 'text', text: j.text }, ...(j.data?.png ? [{ type: 'image', data: j.data.png, mimeType: 'image/png' }] : [])], isError: !j.ok });
     }
     default:
       if (m.id !== undefined && m.method) out({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'method not found' } });

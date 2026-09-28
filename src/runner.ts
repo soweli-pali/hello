@@ -15,6 +15,7 @@ export interface AgentConf {
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
   at?: [number, number]; // where this body first arrives (its home); default: near the middle
+  look?: Record<string, string>; // how the body looks (see /api/rules looks); default: picked from the name
   effort?: string; plannerEffort?: string; thinking?: number; // claude-cli thinking effort (low, medium, high, ...) and/or thinking token budget
   planner?: string; planEvery?: number; // two minds: a slower model plans every few turns, the main model acts on the plan
 }
@@ -265,7 +266,7 @@ async function runAgent(conf: Conf, c: AgentConf, verbs: any, rules: string, cre
   const log = (s: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${c.name.padEnd(10)} ${s}`);
   const client = new Client(conf.server);
   if (!creds[c.name]) {
-    const r = await fetch(conf.server + '/api/join', { method: 'POST', headers: conf.joinKey ? { 'x-join-key': conf.joinKey } : {}, body: JSON.stringify({ name: c.name, at: c.at, meta: { provider: c.provider, model: c.model ?? null } }) });
+    const r = await fetch(conf.server + '/api/join', { method: 'POST', headers: conf.joinKey ? { 'x-join-key': conf.joinKey } : {}, body: JSON.stringify({ name: c.name, at: c.at, look: c.look, meta: { provider: c.provider, model: c.model ?? null } }) });
     const j: any = await r.json(); if (!j.token) { log(`join failed: ${j.error ?? j.text}`); return; }
     creds[c.name] = j; save('runner-creds.json', creds);
   }
