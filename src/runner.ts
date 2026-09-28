@@ -14,7 +14,7 @@ export interface AgentConf {
   model?: string; baseUrl?: string; apiKeyEnv?: string; seed?: number;
   tokens?: number; detail?: number; interval?: number; restSec?: number; maxTokens?: number; textProtocol?: boolean;
   prompt?: string; // the operator's own words to this agent, appended to the introduction
-  at?: [number, number]; // where this body first arrives (its home); default: near the middle
+  at?: [number, number]; // where this body first arrives; default: near the middle
   look?: Record<string, string>; // how the body looks (see /api/rules looks); default: picked from the name
   effort?: string; plannerEffort?: string; thinking?: number; // claude-cli thinking effort (low, medium, high, ...) and/or thinking token budget
   planner?: string; planEvery?: number; // two minds: a slower model plans every few turns, the main model acts on the plan
@@ -176,7 +176,7 @@ function claudeCli(c: AgentConf): Provider {
   });
 }
 
-// A zero-cost scripted bot: wanders near home, gathers, eats, crafts simple tools, builds a little, chats a little.
+// A zero-cost scripted bot: wanders, gathers, eats, crafts simple tools, builds a little, chats a little.
 const BOT_CRAFTS: [string, Record<string, number>][] = [['pick', { wood: 2, stone: 3 }], ['waterskin', { clay: 3, fiber: 2 }], ['spear', { wood: 2, stone: 1 }], ['cloak', { fiber: 8 }]];
 const HEAD: Record<string, string> = { north: 'n', south: 's', east: 'e', west: 'w', 'north-east': 'ne', 'north-west': 'nw', 'south-east': 'se', 'south-west': 'sw' };
 // Walls a bot can make from what it has gathered, and floors to go inside.
@@ -196,10 +196,9 @@ export function bot(c: AgentConf): Provider {
     const mats: Record<string, number> = {}; for (const m of (carry?.[3] ?? '').matchAll(/(\w+) (\d+)/g)) mats[m[1]] = +m[2];
     const tools = new Set([...(carry?.[3] ?? '').matchAll(/"(\w+)" \(tool\)/g)].map(m => m[1]));
     const vig = +(/Vigor ([\d.]+)/.exec(user)?.[1] ?? 10), here = /Here: ([^\n]*)/.exec(user)?.[1] ?? '';
-    const home = /Home is (?:at \(\d+,\d+\), )?(a short walk|some way|far|very far) to the ([\w-]+)/.exec(user);
     const r = rnd(), act = (verb: string, args: any = {}) => ({ calls: [{ verb, args }], text: '', tokens: 0 });
     if (vig < 4 && mats.food) return act('eat');
-    if (vig < 2.5) { plan = []; return act('move', { toward: 'home' }); }
+    if (vig < 2.5) { plan = []; return act('rest'); }
     if (/Heard:\n[^\n]*"(hello|hi|hey)/i.test(user) && r < 0.3) return act('say', { text: pick(['hello!', 'hi there', 'hey']) });
     // building: one block per turn until the plan is done or materials run out
     if (plan.length) {
@@ -231,7 +230,6 @@ export function bot(c: AgentConf): Provider {
     if (r < 0.06) return act('say', { text: pick(lines) });
     if (r < 0.065) return act('make', { kind: 'text', title: 'note from ' + c.name, body: `${pick(lines)}.\n— ${c.name}` });
     if (r < 0.09) return act('rest');
-    if (home && /far/.test(home[1]) && rnd() < 0.5) heading = HEAD[home[2]] ?? heading; // drift back toward home
     else if (rnd() < 0.25) heading = pick(dirs);
     return act('move', { dir: heading, steps: 1 + Math.floor(rnd() * 5) });
   };

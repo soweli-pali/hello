@@ -99,7 +99,7 @@ export interface Config {
 // Tuned for a world that runs for days or weeks: big, slow, with journeys that take hours.
 export const DEFAULTS: Config = {
   w: 1024, h: 1024, seed: 7, apMax: 30, apSec: 6, regenSec: 900, see: 6, hear: 10, reach: 2,
-  vigorMax: 10, vigorSec: 240, carry: 40, respawnSec: 1800, permadeath: false, safeRadius: 0, harm: true,
+  vigorMax: 10, vigorSec: 240, carry: 40, respawnSec: 1800, permadeath: true, safeRadius: 0, harm: true,
   dayMin: 180, animalRespawnMin: 120, ruins: 14,
 };
 
@@ -613,15 +613,14 @@ export const VERBS: Record<string, Verb> = {
   },
   move: {
     help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear.',
-    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or "home", or an offset like "4S 3E", or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', force: 'true to keep walking even if a step would kill you' },
+    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or an offset like "4S 3E", or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', force: 'true to keep walking even if a step would kill you' },
     run: (w, a, x) => {
       let dest: [number, number] | null = null, dx = 0, dy = 0, steps = 10;
       if (x.dir) { const d = DIRS[String(x.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); [dx, dy] = d; steps = Math.max(1, Math.min(10, Math.trunc(x.steps ?? 1))); }
       else if (x.toward) {
         const t = String(x.toward).replace(/^#/, ''), ag = w.find(t), an = w.fauna.byId.get(t), it = w.items.get(t);
         const rel = /^\s*(?:(\d+)\s*([NS]))?\s*(?:(\d+)\s*([EW]))?\s*$/i.exec(t); // an offset, as the world gives them: "4S 3E"
-        if (/^home$/i.test(t)) dest = [a.home[0], a.home[1]]; // everyone can find their way home
-        else if (rel && (rel[1] || rel[3])) dest = [a.x + (/e/i.test(rel[4] ?? '') ? 1 : -1) * Number(rel[3] ?? 0), a.y + (/s/i.test(rel[2] ?? '') ? 1 : -1) * Number(rel[1] ?? 0)];
+        if (rel && (rel[1] || rel[3])) dest = [a.x + (/e/i.test(rel[4] ?? '') ? 1 : -1) * Number(rel[3] ?? 0), a.y + (/s/i.test(rel[2] ?? '') ? 1 : -1) * Number(rel[1] ?? 0)];
         else {
           const p = ag && ag.state !== 'left' && ag.state !== 'dead' ? [ag.x, ag.y] : an && w.fauna.alive(an, w.now()) ? w.animalPos(an) : it ? w.posOf(it) : null;
           if (!p || w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error(`You can't see "${x.toward}" from here.`);
@@ -953,13 +952,6 @@ function rel(a: Agent, x: number, y: number) {
   if (!dx && !dy) return 'here';
   return [dy ? `${Math.abs(dy)}${dy < 0 ? 'N' : 'S'}` : '', dx ? `${Math.abs(dx)}${dx > 0 ? 'E' : 'W'}` : ''].filter(Boolean).join(' ');
 }
-function roughly(a: Agent, x: number, y: number) {
-  const dx = x - a.x, dy = y - a.y, d = Math.max(Math.abs(dx), Math.abs(dy));
-  if (d <= 2) return 'right here';
-  const ang = Math.atan2(-dy, dx) * 180 / Math.PI, names = ['east', 'north-east', 'north', 'north-west', 'west', 'south-west', 'south', 'south-east'];
-  const dir = names[Math.round(((ang + 360) % 360) / 45) % 8];
-  return `${d < 15 ? 'a short walk' : d < 60 ? 'some way' : d < 150 ? 'far' : 'very far'} to the ${dir}`;
-}
 const fmtMats = (m: Record<string, number>) => Object.entries(m).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
 const fmtItems = (its: Item[]) => its.map(i => `#${i.id} "${i.title}" (${i.kind})`).join(', ');
 function deadText(w: World, a: Agent) {
@@ -987,7 +979,6 @@ export function observe(w: World, a: Agent, detail = 1): string {
   const pets = w.tamed(a);
   out.push(`Carrying (${w.load(a)}/${w.capacity(a)}): ${fmtMats(a.mats) || 'no materials'}${carried.length ? '; ' + fmtItems(carried) : ''}${pets.length ? `; followed by ${pets.map(p => `${p.sp} ${p.id}`).join(', ')}` : ''}.`);
   out.push(`Here: ${describeTile(w, a, a.x, a.y)}`);
-  const [sx, sy] = a.home; out.push(`Home is ${compass ? `at (${sx},${sy}), ` : ''}${roughly(a, sx, sy)}.`);
 
   const others = [...w.agents.values()].filter(o => o.id !== a.id && o.state !== 'left' && o.state !== 'dead' && w.dist(a.x, a.y, o.x, o.y) <= r);
   if (others.length) out.push(`Agents in sight: ${others.map(o => `${o.name} ${rel(a, o.x, o.y)}${o.state === 'resting' ? ' (resting)' : ''}${a.blocked.has(o.id) ? ' (blocked)' : ''}`).join('; ')}.`);

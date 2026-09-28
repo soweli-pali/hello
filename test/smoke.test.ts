@@ -113,7 +113,8 @@ test('objects hold things and trade by their own rules', () => {
 
 
 test('bodies: exposure, death, respawn, no quick travel', () => {
-  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001, apMax: 5000, respawnSec: 0.05 });
+  assert.equal(new World(':memory:', { w: 128, h: 128 }).cfg.permadeath, true, 'death is final by default');
+  const w = new World(':memory:', { w: 512, h: 512, apSec: 0.001, apMax: 5000, respawnSec: 0.05, permadeath: false });
   const a = w.agents.get(w.join('Walker').id)!;
   const desert = findTile(w, a.x, a.y, (x, y) => w.geo.biomeAt(x, y) === 'desert' && w.geo.biomeAt(x + 5, y) === 'desert' && !w.safe(x, y))!;
   assert.ok(desert, 'there is desert');
@@ -136,8 +137,8 @@ test('bodies: exposure, death, respawn, no quick travel', () => {
   // there is no jump home: the way back is walked
   w.emit('move', a.id, { x: a.x + 20, y: a.y, cost: 0 });
   assert.equal(w.act(a, 'move', { to: 'home' }).ok, false);
-  const far = w.dist(a.x, a.y, a.home[0], a.home[1]); w.act(a, 'move', { toward: 'home' });
-  assert.ok(w.dist(a.x, a.y, a.home[0], a.home[1]) < far && w.dist(a.x, a.y, a.home[0], a.home[1]) >= far - 10, 'walking home is walking');
+  assert.equal(w.act(a, 'move', { toward: 'home' }).ok, false, 'and no sense of where home is');
+  assert.doesNotMatch(w.act(a, 'look', { detail: 2 }).text, /home/i);
   // operators can place a body; nowhere is safe by default
   const c = w.agents.get(w.join('Placed', {}, [100, 120]).id)!;
   assert.deepEqual([c.x, c.y], [100, 120]); assert.deepEqual(c.home, [100, 120]);
