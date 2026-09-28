@@ -3,31 +3,61 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 import { runHandler } from './sandbox.ts';
+import { Geo, MATERIALS, BIOME_INFO, REGROW, hash } from './geo.ts';
+import type { Material, Biome } from './geo.ts';
+import { Fauna, SPECIES } from './fauna.ts';
+import type { Animal } from './fauna.ts';
 
-export const MATERIALS = ['stone', 'wood', 'clay', 'sand'] as const;
-export type Material = typeof MATERIALS[number];
-export const STRENGTH: Record<Material, number> = { stone: 4, wood: 3, clay: 2, sand: 1 };
-export const KINDS = ['text', 'svg', 'html', 'abc', 'object'] as const;
+export { MATERIALS };
+export type { Material };
+export const STRENGTH: Partial<Record<Material, number>> = { stone: 4, wood: 3, clay: 2, sand: 1, ore: 8, crystal: 3 };
+export const KINDS = ['text', 'svg', 'html', 'abc', 'object', 'tool'] as const;
 export type Kind = typeof KINDS[number];
-const MAX_BODY: Record<Kind, number> = { text: 20_000, svg: 60_000, html: 100_000, abc: 20_000, object: 20_000 };
+const MAX_BODY: Record<Kind, number> = { text: 20_000, svg: 60_000, html: 100_000, abc: 20_000, object: 20_000, tool: 500 };
+
+// Tools are the world's technology: they change what a body can do while carried. They cannot be copied.
+export const RECIPES: Record<string, { needs: Partial<Record<Material, number>>; does: string }> = {
+  pick: { needs: { wood: 2, stone: 3 }, does: 'lets you gather ore and crystal, and gather up to 5 units at once' },
+  spear: { needs: { wood: 2, stone: 1 }, does: 'your blows do 3 damage instead of 1' },
+  waterskin: { needs: { clay: 3, fiber: 2 }, does: 'deserts no longer drain your vigor' },
+  cloak: { needs: { fiber: 8 }, does: 'cold (tundra, peaks) no longer drains your vigor' },
+  boat: { needs: { wood: 10, fiber: 4 }, does: 'water costs 1 AP per tile and no vigor; you can fish (gather on water)' },
+  cart: { needs: { wood: 8, ore: 2 }, does: 'carry 60 more units' },
+  lantern: { needs: { ore: 1, crystal: 1, sand: 2 }, does: 'see normally at night; wolves keep their distance' },
+  compass: { needs: { ore: 3, crystal: 1 }, does: 'you know exact coordinates, and can move or aim by x,y' },
+  spyglass: { needs: { ore: 2, crystal: 2, sand: 3 }, does: 'see twice as far' },
+};
 
 export interface Config {
   w: number; h: number; seed: number;
   apMax: number; apSec: number;       // action points: max, seconds per point
-  regenSec: number;                   // seconds per material unit regenerated on a tile
+  regenSec: number;                   // seconds per material unit regenerated on a tile (× per-material factor)
   see: number; hear: number; reach: number;
+  vigorMax: number; vigorSec: number; // vigor regenerates 1 per vigorSec
+  carry: number;                      // material units a bare body can carry
+  respawnSec: number; permadeath: boolean;
+  safeRadius: number;                 // nobody can be harmed this close to spawn
+  harm: boolean;                      // whether agents can strike each other at all
+  dayMin: number;                     // real minutes per day/night cycle
+  animalRespawnMin: number;
+  ruins: number;
 }
-export const DEFAULTS: Config = { w: 256, h: 256, seed: 7, apMax: 20, apSec: 2, regenSec: 300, see: 6, hear: 10, reach: 2 };
+export const DEFAULTS: Config = {
+  w: 512, h: 512, seed: 7, apMax: 20, apSec: 2, regenSec: 300, see: 6, hear: 10, reach: 2,
+  vigorMax: 10, vigorSec: 90, carry: 40, respawnSec: 300, permadeath: false, safeRadius: 5, harm: true,
+  dayMin: 48, animalRespawnMin: 20, ruins: 7,
+};
 
 export type Loc = { a: string } | { o: string } | { t: [number, number] };
 export interface Agent {
   id: string; name: string; x: number; y: number;
-  ap: number; apT: number; mats: Record<string, number>;
-  notebook: string; blocked: Set<string>; state: 'active' | 'resting' | 'left';
+  ap: number; apT: number; vig: number; vigT: number; mats: Record<string, number>;
+  notebook: string; blocked: Set<string>; state: 'active' | 'resting' | 'left' | 'dead';
+  deadUntil: number; lastBite: number; deaths: number;
   joined: number; lastSeen: number; meta: Record<string, unknown>;
   hearCursor: number; // in-memory only: last event seq this agent has been shown
 }
-export interface Block { m: Material; color: string; s: number; by: string; t: number }
+export interface Block { m: Material; color: string; s: number; by: string; t: number; kind: 'wall' | 'road' }
 export interface Item {
   id: string; kind: Kind; title: string; body: string; author: string; t: number;
   hash: string; cites: string[]; loc: Loc; state?: unknown; mats?: Record<string, number>;
@@ -38,31 +68,33 @@ export interface Result { ok: boolean; text: string; data?: unknown }
 const DIRS: Record<string, [number, number]> = {
   n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0], ne: [1, -1], nw: [-1, -1], se: [1, 1], sw: [-1, 1],
 };
-const LETTER: Record<Material, string> = { stone: 's', wood: 'w', clay: 'c', sand: 'a' };
-const key = (x: number, y: number) => `${x},${y}`;
+const LETTER: Record<Material, string> = { stone: 'S', wood: 'W', clay: 'C', sand: 'N', fiber: 'F', food: 'B', ore: 'O', crystal: 'X' };
+export const key = (x: number, y: number) => `${x},${y}`;
 const locKey = (l: Loc) => 'a' in l ? `a:${l.a}` : 'o' in l ? `o:${l.o}` : `t:${l.t[0]},${l.t[1]}`;
 const clampStr = (s: unknown, n: number) => String(s ?? '').slice(0, n);
 const sha = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+const sum = (m: Record<string, number>) => Object.values(m).reduce((a, b) => a + (b > 0 ? b : 0), 0);
+const isWater = (b: Biome) => b === 'sea' || b === 'river';
 
-// --- terrain: deterministic value noise, so the map needs no storage ---
-function hash(x: number, y: number, s: number) {
-  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 1442695041)) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-function noise(x: number, y: number, scale: number, s: number) {
-  const gx = x / scale, gy = y / scale, x0 = Math.floor(gx), y0 = Math.floor(gy);
-  const fx = gx - x0, fy = gy - y0, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-  const a = hash(x0, y0, s), b = hash(x0 + 1, y0, s), c = hash(x0, y0 + 1, s), d = hash(x0 + 1, y0 + 1, s);
-  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
-}
+const LORE = [
+  'We came from the middle and walked until the grass ran out. The cold keeps what it is given.',
+  'Stone remembers who stacked it. Nobody else does.',
+  'The river does not care about your cart.',
+  'Three of us went up the white mountain. One map came down.',
+  'Light is heavy to carry and light to hold. Glass, ore, a piece of the sky.',
+  'Here the wolves were our neighbours. We built the wall anyway.',
+  'If you are reading this, you walked further than most. Leave something.',
+  'We traded everything for the crossing, and the far shore was only more shore.',
+];
+const RUIN_TOOLS = ['compass', 'lantern', 'spyglass', 'boat', 'cloak', 'pick', 'waterskin', 'cart'];
 
 export class World {
-  cfg: Config; db: DatabaseSync; seq = 0;
+  cfg: Config; db: DatabaseSync; seq = 0; geo: Geo; fauna: Fauna;
   agents = new Map<string, Agent>();
   byName = new Map<string, string>();
   blocks = new Map<string, Block>();
   taken = new Map<string, { amt: number; t: number }>();
+  ground = new Map<string, Record<string, number>>(); // loose materials lying on tiles
   items = new Map<string, Item>();
   held = new Map<string, Set<string>>(); // locKey -> item ids
   recent: Ev[] = [];
@@ -78,12 +110,15 @@ export class World {
     const saved = this.db.prepare('SELECT v FROM meta WHERE k=?').get('config') as any;
     this.cfg = { ...DEFAULTS, ...(saved ? JSON.parse(saved.v) : {}), ...cfg };
     this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('config', JSON.stringify(this.cfg));
+    this.geo = new Geo(this.cfg.w, this.cfg.h, this.cfg.seed);
+    this.fauna = new Fauna(this.geo, this.cfg.seed);
     for (const r of this.db.prepare('SELECT * FROM events ORDER BY seq').iterate() as any) {
       const e: Ev = { ...JSON.parse(r.data), seq: r.seq, t: r.t, type: r.type, a: r.a ?? undefined };
       this.apply(e);
       this.remember(e);
     }
     for (const a of this.agents.values()) a.hearCursor = this.seq;
+    if (this.seq === 0) this.genesis();
   }
 
   // ---------- event core ----------
@@ -95,7 +130,7 @@ export class World {
     for (const f of this.listeners) try { f(e); } catch { /* viewer hiccups never break the world */ }
     return e;
   }
-  private remember(e: Ev) { this.recent.push(e); if (this.recent.length > 3000) this.recent.splice(0, 1000); }
+  private remember(e: Ev) { this.recent.push(e); if (this.recent.length > 4000) this.recent.splice(0, 1000); }
 
   apply(e: Ev) {
     this.seq = e.seq;
@@ -103,37 +138,41 @@ export class World {
     if (ag) {
       ag.lastSeen = e.t;
       if (e.cost) { ag.ap = this.apOf(ag, e.t) - e.cost; ag.apT = e.t; }
-      if (ag.state !== 'active' && !['rest', 'leave'].includes(e.type)) ag.state = 'active';
+      if (e.dv) { ag.vig = Math.min(this.cfg.vigorMax, this.vigOf(ag, e.t) + e.dv); ag.vigT = e.t; }
+      if (ag.state === 'resting' && e.type !== 'rest' && e.type !== 'hurt') ag.state = 'active';
     }
     switch (e.type) {
       case 'join': {
-        const a: Agent = { id: e.a!, name: e.name, x: e.x, y: e.y, ap: this.cfg.apMax, apT: e.t, mats: {},
-          notebook: '', blocked: new Set(), state: 'active', joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
+        const a: Agent = { id: e.a!, name: e.name, x: e.x, y: e.y, ap: this.cfg.apMax, apT: e.t, vig: this.cfg.vigorMax, vigT: e.t, mats: {},
+          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq };
         this.agents.set(a.id, a); this.byName.set(a.name.toLowerCase(), a.id); break;
       }
       case 'move': ag!.x = e.x; ag!.y = e.y; break;
+      case 'home': this.dropAll(ag!, e.from[0], e.from[1]); ag!.x = e.x; ag!.y = e.y; break;
       case 'gather': {
-        const k = key(e.x, e.y);
-        this.taken.set(k, { amt: this.depositAt(e.x, e.y, e.t).amt - e.n, t: e.t });
+        if (e.loose) { const g = this.ground.get(key(e.x, e.y))!; g[e.m] -= e.n; }
+        else if (e.m !== 'food' || !e.fish) this.taken.set(key(e.x, e.y), { amt: this.depositAt(e.x, e.y, e.t).amt - e.n, t: e.t });
         ag!.mats[e.m] = (ag!.mats[e.m] ?? 0) + e.n; break;
       }
-      case 'place': {
-        ag!.mats[e.m] -= 1;
-        const k = key(e.x, e.y), b = this.blocks.get(k);
-        if (b) { b.s += STRENGTH[e.m as Material]; if (e.color) b.color = e.color; }
-        else this.blocks.set(k, { m: e.m, color: e.color, s: STRENGTH[e.m as Material], by: e.a!, t: e.t });
+      case 'place': case 'build': {
+        if (ag) ag.mats[e.m] -= 1;
+        const k = key(e.x, e.y), b = this.blocks.get(k), s = e.kind === 'road' ? 1 : STRENGTH[e.m as Material]!;
+        if (b) { b.s += s; if (e.color) b.color = e.color; }
+        else this.blocks.set(k, { m: e.m, color: e.color, s, by: e.a ?? 'world', t: e.t, kind: e.kind ?? 'wall' });
         break;
       }
       case 'remove': {
         const k = key(e.x, e.y), b = this.blocks.get(k)!;
         b.s -= e.dmg; if (b.s <= 0) this.blocks.delete(k); break;
       }
-      case 'make': {
-        const it: Item = { id: e.id, kind: e.kind, title: e.title, body: e.body, author: e.author ?? e.a, t: e.t,
+      case 'make': case 'craft': {
+        if (e.type === 'craft') for (const [m, n] of Object.entries(e.needs as Record<string, number>)) ag!.mats[m] -= n;
+        const it: Item = { id: e.id, kind: e.kind ?? 'tool', title: e.title, body: e.body, author: e.author ?? e.a, t: e.t,
           hash: e.hash, cites: e.cites ?? [], loc: e.loc ?? { a: e.a } };
         if (it.kind === 'object') { it.state = null; it.mats = {}; }
         this.items.set(it.id, it); this.index(it, undefined); break;
       }
+      case 'drop': { const g = this.groundAt(e.x, e.y); for (const [m, n] of Object.entries(e.mats as Record<string, number>)) g[m] = (g[m] ?? 0) + n; break; }
       case 'transfer': this.applyTransfer(e); break;
       case 'use': {
         const o = this.items.get(e.obj)!;
@@ -142,23 +181,58 @@ export class World {
         for (const tr of e.transfers ?? []) this.applyTransfer(tr);
         break;
       }
+      case 'eat': ag!.mats.food -= e.n; break;
+      case 'strike': {
+        if (e.target) { const v = this.agents.get(e.target)!; v.vig = this.vigOf(v, e.t) - e.dmg; v.vigT = e.t; }
+        if (e.animal) {
+          const an = this.fauna.byId.get(e.animal)!;
+          an.hp -= e.dmg;
+          if (e.killed) {
+            an.hp = SPECIES[an.sp].hp; an.deadUntil = e.t + this.cfg.animalRespawnMin * 60_000;
+            if (an.tamedBy) { const [x, y] = [e.x, e.y]; an.tamedBy = null; an.hx = x; an.hy = y; }
+            for (const [m, n] of Object.entries(e.gain ?? {})) ag!.mats[m] = (ag!.mats[m] ?? 0) + (n as number);
+            const g = this.groundAt(e.x, e.y); for (const [m, n] of Object.entries(e.spill ?? {})) g[m] = (g[m] ?? 0) + (n as number);
+          }
+        }
+        break;
+      }
+      case 'hurt': ag!.lastBite = e.cause === 'wolf' ? e.t : ag!.lastBite; break;
+      case 'tame': { const an = this.fauna.byId.get(e.animal)!; an.tamedBy = e.a!; ag!.mats.food -= 1; break; }
+      case 'die': {
+        this.dropAll(ag!, ag!.x, ag!.y);
+        ag!.state = 'dead'; ag!.deadUntil = e.until ?? Infinity; ag!.deaths++;
+        break;
+      }
+      case 'wake': ag!.x = e.x; ag!.y = e.y; ag!.state = 'active'; ag!.vig = this.cfg.vigorMax; ag!.vigT = e.t; ag!.ap = this.cfg.apMax; ag!.apT = e.t; break;
       case 'note': ag!.notebook = e.text; break;
       case 'rest': ag!.state = 'resting'; break;
-      case 'leave': ag!.state = 'left'; break;
+      case 'leave': this.releaseAnimals(ag!); ag!.state = 'left'; break;
       case 'block': e.on ? ag!.blocked.add(e.target) : ag!.blocked.delete(e.target); break;
       case 'config': Object.assign(this.cfg, e.cfg); break;
     }
   }
 
+  // Death and going home both leave a body's burden where it stood.
+  private dropAll(a: Agent, x: number, y: number) {
+    const g = this.groundAt(x, y);
+    for (const [m, n] of Object.entries(a.mats)) if (n > 0) g[m] = (g[m] ?? 0) + n;
+    a.mats = {};
+    for (const it of this.itemsAt({ a: a.id })) { const old = it.loc; it.loc = { t: [x, y] }; this.index(it, old); }
+    this.releaseAnimals(a, x, y);
+  }
+  private releaseAnimals(a: Agent, x = a.x, y = a.y) {
+    for (const an of this.fauna.list) if (an.tamedBy === a.id) { an.tamedBy = null; an.hx = x; an.hy = y; }
+  }
+  groundAt(x: number, y: number) { const k = key(x, y); let g = this.ground.get(k); if (!g) this.ground.set(k, g = {}); return g; }
   private applyTransfer(tr: any) {
+    if (tr.item) { const it = this.items.get(tr.item)!; const old = it.loc; it.loc = tr.to; this.index(it, old); return; }
     const from = this.holder(tr.from), to = this.holder(tr.to);
-    if (tr.item) { const it = this.items.get(tr.item)!; const old = it.loc; it.loc = tr.to; this.index(it, old); }
-    else { from[tr.m] -= tr.n; to[tr.m] = (to[tr.m] ?? 0) + tr.n; }
+    from[tr.m] -= tr.n; to[tr.m] = (to[tr.m] ?? 0) + tr.n;
   }
   private holder(l: Loc): Record<string, number> {
     if ('a' in l) return this.agents.get(l.a)!.mats;
     if ('o' in l) return this.items.get(l.o)!.mats!;
-    return {}; // materials dropped on the ground scatter; nothing holds them
+    return this.groundAt(l.t[0], l.t[1]);
   }
   private index(it: Item, old: Loc | undefined) {
     if (old) this.held.get(locKey(old))?.delete(it.id);
@@ -166,20 +240,38 @@ export class World {
   }
   itemsAt(l: Loc): Item[] { return [...(this.held.get(locKey(l)) ?? [])].map(id => this.items.get(id)!); }
 
+  // The world before anyone arrives: a few ruins far out, each holding something useful and a few words.
+  private genesis() {
+    const [sx, sy] = this.spawn(), sites: [number, number][] = [];
+    for (let i = 0; sites.length < this.cfg.ruins && i < 5000; i++) {
+      const x = 8 + Math.floor(hash(i, 1, this.cfg.seed + 900) * (this.cfg.w - 16)), y = 8 + Math.floor(hash(i, 2, this.cfg.seed + 900) * (this.cfg.h - 16));
+      const b = this.geo.biomeAt(x, y);
+      if (isWater(b) || b === 'peak' || Math.hypot(x - sx, y - sy) < this.cfg.w * 0.22) continue;
+      if (sites.some(([a, c]) => Math.hypot(a - x, c - y) < this.cfg.w * 0.15)) continue;
+      sites.push([x, y]);
+    }
+    sites.forEach(([x, y], n) => {
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== 3 || hash(x + dx, y + dy, 5) < 0.4) continue;
+        if (isWater(this.geo.biomeAt(x + dx, y + dy))) continue;
+        this.emit('build', undefined, { x: x + dx, y: y + dy, m: 'stone', color: '#7a766c', kind: 'wall' });
+      }
+      const lore = LORE[n % LORE.length], tool = RUIN_TOOLS[n % RUIN_TOOLS.length];
+      this.emit('make', undefined, { id: `r${n + 1}a`, kind: 'text', title: 'carved words', body: lore, author: 'world', hash: sha(lore), cites: [], loc: { t: [x, y] } });
+      this.emit('make', undefined, { id: `r${n + 1}b`, kind: 'tool', title: tool, body: RECIPES[tool].does, author: 'world', hash: sha(tool), cites: [], loc: { t: [x, y] } });
+      this.emit('drop', undefined, { x, y, mats: { crystal: 1 + (n % 2), ore: 2 } });
+    });
+  }
+
   // ---------- derived physics ----------
   apOf(a: Agent, t = this.now()) { return Math.min(this.cfg.apMax, a.ap + (t - a.apT) / 1000 / this.cfg.apSec); }
-  terrain(x: number, y: number): { m: Material | null; cap: number } {
-    const s = this.cfg.seed; let best: Material | null = null, bv = 0;
-    MATERIALS.forEach((m, i) => { const v = noise(x, y, 14 + i * 3, s * 31 + i) * 0.8 + noise(x, y, 4, s * 17 + i) * 0.2; if (v > bv) { bv = v; best = m; } });
-    const rich = noise(x, y, 9, s * 7 + 99);
-    if (bv < 0.72 || rich < 0.4) return { m: null, cap: 0 };
-    return { m: best, cap: 1 + Math.floor((bv - 0.72) * 30 * rich) };
-  }
+  vigOf(a: Agent, t = this.now()) { return Math.min(this.cfg.vigorMax, a.vig + (t - a.vigT) / 1000 / this.cfg.vigorSec); }
+  terrain(x: number, y: number) { return this.geo.depositAt(x, y); }
   depositAt(x: number, y: number, t = this.now()) {
-    const { m, cap } = this.terrain(x, y);
+    const { m, cap } = this.geo.depositAt(x, y);
     if (!m) return { m, cap, amt: 0 };
     const tk = this.taken.get(key(x, y));
-    const amt = tk ? Math.min(cap, tk.amt + Math.floor((t - tk.t) / 1000 / this.cfg.regenSec)) : cap;
+    const amt = tk ? Math.min(cap, tk.amt + Math.floor((t - tk.t) / 1000 / (this.cfg.regenSec * REGROW[m]))) : cap;
     return { m, cap, amt };
   }
   posOf(it: Item): [number, number] | null {
@@ -188,22 +280,50 @@ export class World {
     if ('a' in l) { const a = this.agents.get(l.a)!; return [a.x, a.y]; }
     return this.posOf(this.items.get(l.o)!);
   }
+  animalPos(an: Animal, t = this.now()): [number, number] {
+    const owner = an.tamedBy ? this.agents.get(an.tamedBy) : undefined;
+    return this.fauna.pos(an, t, owner, (x, y) => this.blocks.get(key(x, y))?.kind === 'wall');
+  }
+  animalsNear(x: number, y: number, r: number, t = this.now()) {
+    return this.fauna.list.filter(an => this.fauna.alive(an, t)).map(an => ({ an, p: this.animalPos(an, t) }))
+      .filter(({ p }) => this.dist(p[0], p[1], x, y) <= r);
+  }
   find(name: string): Agent | undefined {
     const s = String(name ?? '').replace(/^@/, '').toLowerCase();
     return this.agents.get(s) ?? this.agents.get(this.byName.get(s) ?? '');
   }
   dist(ax: number, ay: number, bx: number, by: number) { return Math.max(Math.abs(ax - bx), Math.abs(ay - by)); }
   spawn(): [number, number] { return [Math.floor(this.cfg.w / 2), Math.floor(this.cfg.h / 2)]; }
+  safe(x: number, y: number) { const [sx, sy] = this.spawn(); return this.dist(x, y, sx, sy) <= this.cfg.safeRadius; }
+  phase(t = this.now()) { return (t / (this.cfg.dayMin * 60_000) + 0.3) % 1; }
+  night(t = this.now()) { return this.phase(t) >= 0.75; }
+  timeWords(t = this.now()) { const p = this.phase(t); return p < 0.25 ? 'morning' : p < 0.5 ? 'midday' : p < 0.75 ? 'evening' : 'night'; }
+  has(a: Agent, tool: string) { return this.itemsAt({ a: a.id }).some(i => i.kind === 'tool' && i.title === tool); }
+  count(a: Agent, tool: string) { return this.itemsAt({ a: a.id }).filter(i => i.kind === 'tool' && i.title === tool).length; }
+  tamed(a: Agent) { return this.fauna.list.filter(an => an.tamedBy === a.id); }
+  capacity(a: Agent) { return this.cfg.carry + 60 * this.count(a, 'cart') + 30 * this.tamed(a).length; }
+  load(a: Agent) { return sum(a.mats); }
+  sight(a: Agent) { const r = this.cfg.see * (this.has(a, 'spyglass') ? 2 : 1); return this.night() && !this.has(a, 'lantern') ? Math.ceil(r / 2) : r; }
+  // What one step onto (x,y) costs a body: AP, and vigor drained by exposure.
+  step(a: Agent, x: number, y: number) {
+    const b = this.geo.biomeAt(x, y), info = BIOME_INFO[b], blk = this.blocks.get(key(x, y));
+    if (blk?.kind === 'road') return { ap: 0.5, dv: 0, b };
+    const boat = isWater(b) && this.has(a, 'boat');
+    const ap = (boat ? 1 : info.cost) + (blk ? blk.s : 0);
+    const dv = boat || this.safe(x, y) || (info.guard && this.has(a, info.guard)) ? 0 : info.drain;
+    return { ap, dv, b };
+  }
 
   // ---------- identity ----------
   join(name: string, meta: Record<string, unknown> = {}): { id: string; token: string } {
     name = String(name ?? '').trim().slice(0, 32);
-    if (!/^[\p{L}\p{N}_\- .]{1,32}$/u.test(name)) throw new Error('name: 1-32 letters, digits, space, _ - .');
+    if (!/^[\p{L}\p{N}_\- .]{1,32}$/u.test(name) || /^(world|ground|user|spawn)$/i.test(name)) throw new Error('name: 1-32 letters, digits, space, _ - .');
     if (this.byName.has(name.toLowerCase())) throw new Error('name taken');
-    const id = 'a' + (this.seq + 1), [sx, sy] = this.spawn();
-    const e = this.emit('join', id, { name, x: sx + Math.floor(Math.random() * 7) - 3, y: sy + Math.floor(Math.random() * 7) - 3, meta });
+    const id = 'a' + (this.seq + 1);
+    const e = this.emit('join', id, { name, ...this.spawnSpot(), meta });
     return { id: e.a!, token: this.issueToken(e.a!) };
   }
+  spawnSpot() { const [sx, sy] = this.spawn(); return { x: sx + Math.floor(Math.random() * 7) - 3, y: sy + Math.floor(Math.random() * 7) - 3 }; }
   issueToken(agent: string) {
     const token = randomBytes(24).toString('base64url');
     this.db.prepare('INSERT INTO tokens VALUES (?,?)').run(sha(token), agent);
@@ -218,8 +338,28 @@ export class World {
   act(a: Agent, verb: string, args: any = {}): Result {
     const f = (VERBS as any)[verb];
     if (!f) return { ok: false, text: `Unknown verb "${verb}". Verbs: ${Object.keys(VERBS).join(', ')}.` };
-    try { return f.run(this, a, args ?? {}); }
-    catch (err: any) { return { ok: false, text: String(err?.message ?? err) }; }
+    try {
+      const ghostly = ['look', 'note', 'rest', 'inspect'].includes(verb); // what the dead can still do
+      if (a.state === 'dead' && this.now() >= a.deadUntil) this.emit('wake', a.id, this.spawnSpot());
+      if (a.state === 'dead') return ghostly ? f.run(this, a, args ?? {}) : { ok: false, text: deadText(this, a) };
+      const pre = this.dangers(a);
+      if ((a.state as string) === 'dead') return { ok: false, text: pre };
+      const r = f.run(this, a, args ?? {});
+      return pre ? { ...r, text: `${pre} ${r.text}` } : r;
+    } catch (err: any) { return { ok: false, text: String(err?.message ?? err) }; }
+  }
+  // Wolves bite at night, when you are close, outside the safe ground, without a lantern.
+  dangers(a: Agent): string {
+    const t = this.now();
+    if (!this.night(t) || this.safe(a.x, a.y) || this.has(a, 'lantern') || t - a.lastBite < 45_000) return '';
+    const wolf = this.animalsNear(a.x, a.y, 1, t).find(({ an }) => SPECIES[an.sp].bites && !an.tamedBy);
+    if (!wolf) return '';
+    this.emit('hurt', a.id, { cause: 'wolf', animal: wolf.an.id, dv: -SPECIES.wolf.bites! });
+    if (this.vigOf(a) <= 0) { this.kill(a, 'wolves'); return 'A wolf attacked you in the dark, and you died.'; }
+    return `A wolf bit you in the dark! (vigor ${this.vigOf(a).toFixed(1)})`;
+  }
+  kill(a: Agent, cause: string) {
+    this.emit('die', a.id, { cause, x: a.x, y: a.y, until: this.cfg.permadeath ? null : this.now() + this.cfg.respawnSec * 1000 });
   }
   need(a: Agent, cost: number) {
     const have = this.apOf(a);
@@ -229,14 +369,20 @@ export class World {
     }
   }
   near(a: Agent, x: number, y: number, r = this.cfg.reach) {
-    if (this.dist(a.x, a.y, x, y) > r) throw new Error(`(${x},${y}) is out of reach (${r} tiles).`);
+    if (this.dist(a.x, a.y, x, y) > r) throw new Error(`That is out of reach (${r} tiles).`);
   }
+  // Where a body is aiming: a direction, a relative offset, or (with a compass) coordinates.
   target(a: Agent, args: any): [number, number] {
     if (args.dir) { const d = DIRS[String(args.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); return [a.x + d[0], a.y + d[1]]; }
-    if (args.x !== undefined && args.y !== undefined) return [Math.trunc(args.x), Math.trunc(args.y)];
+    if (args.dx !== undefined || args.dy !== undefined) return [a.x + Math.trunc(args.dx ?? 0), a.y + Math.trunc(args.dy ?? 0)];
+    if (args.x !== undefined && args.y !== undefined) {
+      if (!this.has(a, 'compass')) throw new Error('Without a compass you do not know coordinates. Use dir, or dx/dy (east/south positive).');
+      return [Math.trunc(args.x), Math.trunc(args.y)];
+    }
     return [a.x, a.y];
   }
-  resolveItem(a: Agent, id: string): Item {
+  at(a: Agent, x: number, y: number) { return this.has(a, 'compass') ? `(${x},${y})` : rel(a, x, y); }
+  resolveItem(id: string): Item {
     const it = this.items.get(String(id ?? '').replace(/^#/, ''));
     if (!it) throw new Error(`No item "${id}".`);
     return it;
@@ -246,6 +392,7 @@ export class World {
     const mine = 'a' in it.loc && it.loc.a === a.id;
     if (!mine && this.dist(a.x, a.y, p[0], p[1]) > r) throw new Error(`#${it.id} is out of reach.`);
   }
+  room(a: Agent) { return Math.max(0, this.capacity(a) - this.load(a)); }
 
   // Run an object's handler and turn its (validated) wishes into one 'use' event.
   runObject(a: Agent, o: Item, fn: 'use' | 'receive', extra: Record<string, unknown>, cost: number): Result {
@@ -269,22 +416,23 @@ export class World {
       data.state = JSON.parse(s);
     }
     if (out.say) data.said = clampStr(out.say, 500);
-    // made artifacts land inside the object; it can give them out in the same call
     const made: any[] = []; let n = 0;
     for (const m of (Array.isArray(out.make) ? out.make : []).slice(0, 5)) {
-      const kind = KINDS.includes(m?.kind) && m.kind !== 'object' ? m.kind : 'text';
+      const kind = KINDS.includes(m?.kind) && m.kind !== 'object' && m.kind !== 'tool' ? m.kind : 'text';
       const body = clampStr(m?.body, MAX_BODY[kind as Kind]);
       made.push({ id: `i${this.seq + 1}_${n++}`, kind, title: clampStr(m?.title, 80) || 'untitled', body, author: o.id, hash: sha(body), cites: [o.id], loc: { o: o.id } });
     }
     const mats = { ...o.mats }, owned = new Set([...this.itemsAt({ o: o.id }).map(i => i.id), ...made.map(m => m.id)]);
-    const transfers: any[] = [];
+    const transfers: any[] = []; const room = new Map<string, number>();
     for (const g of (Array.isArray(out.give) ? out.give : []).slice(0, 20)) {
       const who = g?.to === undefined || g.to === 'user' ? a : g.to === 'ground' ? null : this.find(g.to);
-      if (who === undefined || (who && this.dist(who.x, who.y, pos[0], pos[1]) > 3)) continue;
+      if (who === undefined || (who && (who.state === 'dead' || who.state === 'left' || this.dist(who.x, who.y, pos[0], pos[1]) > 3))) continue;
       const to: Loc = who ? { a: who.id } : { t: [pos[0], pos[1]] };
       if (g.item && owned.has(g.item)) { owned.delete(g.item); transfers.push({ from: { o: o.id }, to, item: g.item }); }
-      else if (g.material && who && (mats[g.material] ?? 0) >= (g.n ?? 1) && (g.n ?? 1) > 0) {
-        const nn = Math.trunc(g.n ?? 1); mats[g.material] -= nn; transfers.push({ from: { o: o.id }, to, m: g.material, n: nn });
+      else if (g.material && (mats[g.material] ?? 0) >= (g.n ?? 1) && (g.n ?? 1) > 0) {
+        const nn = Math.trunc(g.n ?? 1);
+        if (who) { const r = room.get(who.id) ?? this.room(who); if (r < nn) continue; room.set(who.id, r - nn); }
+        mats[g.material] -= nn; transfers.push({ from: { o: o.id }, to, m: g.material, n: nn });
       }
     }
     if (made.length) data.made = made;
@@ -298,56 +446,70 @@ export class World {
 
 // ---------- the verbs: identical for every agent ----------
 type Verb = { help: string; args: Record<string, string>; run: (w: World, a: Agent, x: any) => Result };
+const AIM = { dir: 'adjacent direction n,s,e,w,ne,nw,se,sw', dx: 'or offset east (+) / west (-)', dy: 'and offset south (+) / north (-)', x: 'or x (needs a compass)', y: 'and y (needs a compass)' };
 export const VERBS: Record<string, Verb> = {
   look: {
     help: 'Observe your surroundings. Free.',
-    args: { detail: '0 = short digest, 1 = with map (default), 2 = everything nearby' },
+    args: { detail: '0 = short digest, 1 = with map (default), 2 = everything you can perceive' },
     run: (w, a, x) => ({ ok: true, text: observe(w, a, detailOf(x.detail)) }),
   },
   move: {
-    help: 'Walk up to 10 steps. 1 AP per step, more to push through blocks. {to:"spawn"} returns you to spawn for free, always.',
-    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', x: 'target x (alternative to dir)', y: 'target y', to: '"spawn"' },
+    help: 'Walk up to 10 steps. Each step costs AP by terrain (meadow 1, forest/desert/tundra 2, marsh 3, mountain 4, peak 8, swimming 5-8, roads 0.5) plus the strength of any wall you push through. Harsh terrain drains vigor unless you carry the right gear. {to:"spawn"} always works and is free, but you arrive with nothing: all you carry is left where you stood.',
+    args: { dir: 'n,s,e,w,ne,nw,se,sw', steps: '1-10 (with dir)', toward: 'or the name/id of an agent, animal or item you can see', x: 'or x (needs a compass)', y: 'and y', to: '"spawn"', force: 'true to keep walking even if a step would kill you' },
     run: (w, a, x) => {
-      if (x.to === 'spawn') { const [sx, sy] = w.spawn(); w.emit('move', a.id, { x: sx, y: sy, cost: 0 }); return { ok: true, text: `You are back at spawn (${sx},${sy}).` }; }
-      let dx: number, dy: number, steps: number;
+      if (x.to === 'spawn' || x.to === 'home') {
+        const s = w.spawnSpot(); w.emit('home', a.id, { from: [a.x, a.y], ...s });
+        return { ok: true, text: `You are back at spawn, empty-handed. What you carried lies where you were.` };
+      }
+      let dest: [number, number] | null = null, dx = 0, dy = 0, steps = 10;
       if (x.dir) { const d = DIRS[String(x.dir).toLowerCase()]; if (!d) throw new Error('dir must be n,s,e,w,ne,nw,se,sw'); [dx, dy] = d; steps = Math.max(1, Math.min(10, Math.trunc(x.steps ?? 1))); }
-      else if (x.x !== undefined && x.y !== undefined) { dx = 0; dy = 0; steps = 10; }
-      else throw new Error('move needs dir (+steps) or x,y');
-      let cx = a.x, cy = a.y, cost = 0; const pushed: string[] = [];
+      else if (x.toward) {
+        const t = String(x.toward).replace(/^#/, ''), ag = w.find(t), an = w.fauna.byId.get(t), it = w.items.get(t);
+        const p = ag && ag.state !== 'left' && ag.state !== 'dead' ? [ag.x, ag.y] : an && w.fauna.alive(an, w.now()) ? w.animalPos(an) : it ? w.posOf(it) : null;
+        if (!p || w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error(`You can't see "${x.toward}" from here.`);
+        dest = [p[0], p[1]];
+      } else if (x.x !== undefined && x.y !== undefined) dest = w.target(a, x);
+      else throw new Error('move needs dir (+steps), toward, or to:"spawn"');
+      let cx = a.x, cy = a.y, cost = 0, dv = 0; const notes: string[] = []; let why = '';
+      const vig0 = w.vigOf(a);
       for (let i = 0; i < steps; i++) {
         let sx = dx, sy = dy;
-        if (x.dir === undefined) { sx = Math.sign(Math.trunc(x.x) - cx); sy = Math.sign(Math.trunc(x.y) - cy); if (!sx && !sy) break; }
-        const nx = Math.max(0, Math.min(w.cfg.w - 1, cx + sx)), ny = Math.max(0, Math.min(w.cfg.h - 1, cy + sy));
-        if (nx === cx && ny === cy) break;
-        const b = w.blocks.get(key(nx, ny)); const c = 1 + (b ? b.s : 0);
-        if (w.apOf(a) < cost + c) break;
-        cost += c; cx = nx; cy = ny; if (b) pushed.push(`(${nx},${ny})`);
+        if (dest) { sx = Math.sign(dest[0] - cx); sy = Math.sign(dest[1] - cy); if (!sx && !sy) break; }
+        const nx = cx + sx, ny = cy + sy;
+        if (!w.geo.inside(nx, ny)) { why = 'The world ends here.'; break; }
+        const s = w.step(a, nx, ny);
+        if (w.apOf(a) < cost + s.ap) { why = i ? '' : `Not enough AP for that step (needs ${s.ap}).`; break; }
+        if (vig0 - dv - s.dv <= 0 && !(x.force === true || x.force === 'true')) { why = `Another step would kill you (vigor ${(vig0 - dv).toFixed(1)}). Rest, eat, or pass force:true.`; break; }
+        cost += s.ap; dv += s.dv; cx = nx; cy = ny;
+        if (w.blocks.get(key(nx, ny))?.kind === 'wall') notes.push('pushed through a wall');
+        if (dv >= vig0) break;
       }
-      if (cx === a.x && cy === a.y) { w.need(a, 1 + (w.blocks.get(key(a.x + (dx || 0), a.y + (dy || 0)))?.s ?? 0)); return { ok: false, text: 'You did not move (edge of the world).' }; }
-      w.emit('move', a.id, { x: cx, y: cy, cost });
-      return { ok: true, text: `You are at (${cx},${cy}). Spent ${cost} AP${pushed.length ? `, pushing through blocks at ${pushed.join(' ')}` : ''}.` };
+      if (cx === a.x && cy === a.y) return { ok: false, text: why || 'You did not move.' };
+      w.emit('move', a.id, { x: cx, y: cy, cost, dv: dv ? -+dv.toFixed(2) : undefined });
+      const b = w.geo.biomeAt(cx, cy);
+      let text = `You walk to ${w.has(a, 'compass') ? `(${cx},${cy})` : 'a new spot'} in ${BIOME_INFO[b].words}. Spent ${cost} AP${dv ? `; the ${isWater(b) ? 'water' : 'weather'} cost you ${dv.toFixed(1)} vigor (now ${w.vigOf(a).toFixed(1)})` : ''}${notes.length ? `; ${[...new Set(notes)].join(', ')}` : ''}.`;
+      if (w.vigOf(a) <= 0) { w.kill(a, `exposure in ${BIOME_INFO[b].words}`); text += ' You collapse and die.'; }
+      else if (why) text += ' ' + why;
+      return { ok: true, text };
     },
   },
   say: {
-    help: `Speak aloud. Heard by anyone within a few tiles. 1 AP.`,
-    args: { text: 'up to 500 chars' },
+    help: 'Speak aloud; heard within about 10 tiles. {loud:true} shouts, heard three times as far, for 3 AP. 1 AP.',
+    args: { text: 'up to 500 chars', loud: 'true to shout' },
     run: (w, a, x) => {
       const text = clampStr(x.text, 500).trim(); if (!text) throw new Error('say what?');
-      w.need(a, 1); w.emit('say', a.id, { text, x: a.x, y: a.y, cost: 1 });
-      return { ok: true, text: 'You said it.' };
+      const loud = x.loud === true || x.loud === 'true', cost = loud ? 3 : 1;
+      w.need(a, cost); w.emit('say', a.id, { text, x: a.x, y: a.y, cost, loud: loud || undefined });
+      return { ok: true, text: loud ? 'You shouted it.' : 'You said it.' };
     },
   },
   gather: {
-    help: 'Collect whatever material is in the tile you stand on (2 AP per unit; see "Here:" in look), or pick up an item within reach (1 AP).',
-    args: { n: 'units of material, 1-3 (default 1)', item: 'id of an item to pick up instead' },
+    help: 'Take materials from where you stand: loose materials on the ground (1 AP for up to 10), or the tile\'s natural deposit (2 AP per unit, up to 3; ore and crystal need a pick). On water with a boat, you fish. Or {item} picks up an item within reach (1 AP).',
+    args: { n: 'units', material: 'which material (optional)', item: 'id of an item to pick up instead' },
     run: (w, a, x) => {
       if (x.item && MATERIALS.includes(x.item)) { x = { ...x, material: x.item }; delete x.item; }
-      if (x.material && MATERIALS.includes(x.material)) {
-        const d = w.depositAt(a.x, a.y);
-        if (d.m !== x.material) throw new Error(`There is no ${x.material} under you${d.m ? ` (only ${d.m})` : ''}. You can only gather from the tile you stand on.`);
-      }
       if (x.item) {
-        const it = w.resolveItem(a, x.item);
+        const it = w.resolveItem(x.item);
         if (!('t' in it.loc)) throw new Error(`#${it.id} is not lying on the ground.`);
         w.reachable(a, it);
         if (it.kind === 'object' && it.author !== a.id) {
@@ -357,49 +519,74 @@ export const VERBS: Record<string, Verb> = {
         w.need(a, 1); w.emit('transfer', a.id, { from: it.loc, to: { a: a.id }, item: it.id, cost: 1 });
         return { ok: true, text: `You picked up #${it.id} "${it.title}".` };
       }
-      const d = w.depositAt(a.x, a.y);
-      if (!d.m || d.amt <= 0) throw new Error(d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather on this tile. Deposits show on the map as s/w/c/a.');
-      const n = Math.max(1, Math.min(3, Math.trunc(x.n ?? 1), d.amt));
+      const room = w.room(a);
+      if (room <= 0) throw new Error(`You can't carry any more (${w.load(a)}/${w.capacity(a)}). Carts and pack animals help.`);
+      const loose = Object.entries(w.ground.get(key(a.x, a.y)) ?? {}).filter(([, n]) => n > 0);
+      const d = w.depositAt(a.x, a.y), want = x.material;
+      const pickLoose = loose.find(([m]) => m === want) ?? (!want && !(d.m && d.amt > 0) ? loose[0] : undefined);
+      if (pickLoose) {
+        const n = Math.max(1, Math.min(10, Math.trunc(x.n ?? 10), pickLoose[1], room));
+        w.need(a, 1); w.emit('gather', a.id, { x: a.x, y: a.y, m: pickLoose[0], n, loose: true, cost: 1 });
+        return { ok: true, text: `You picked up ${n} ${pickLoose[0]} from the ground.` };
+      }
+      const b = w.geo.biomeAt(a.x, a.y);
+      if (isWater(b)) {
+        if (!w.has(a, 'boat')) throw new Error('You are swimming; you need a boat to fish.');
+        w.need(a, 3); w.emit('gather', a.id, { x: a.x, y: a.y, m: 'food', n: 1, fish: true, cost: 3 });
+        return { ok: true, text: 'You caught a fish (1 food).' };
+      }
+      if (want && d.m !== want) throw new Error(`There is no ${want} here${d.m ? ` (only ${d.m})` : ''}. You can only gather from the tile you stand on.`);
+      if (!d.m || d.amt <= 0) throw new Error(d.m ? `The ${d.m} here is used up for now; it regrows slowly.` : 'There is nothing to gather on this tile. Deposits show on the map as capital letters.');
+      const pick = w.has(a, 'pick');
+      if ((d.m === 'ore' || d.m === 'crystal') && !pick) throw new Error(`There is ${d.m} here, but you need a pick to get it out.`);
+      const n = Math.max(1, Math.min(pick ? 5 : 3, Math.trunc(x.n ?? 1), d.amt, room));
       w.need(a, 2 * n); w.emit('gather', a.id, { x: a.x, y: a.y, m: d.m, n, cost: 2 * n });
       return { ok: true, text: `You gathered ${n} ${d.m}. (${d.amt - n} left here.)` };
     },
   },
   place: {
-    help: 'Place a coloured block made of one material on a tile within reach. Placing on an existing block reinforces it. Blocks are slow to walk through. 1 AP.',
-    args: { material: MATERIALS.join('|'), color: '#rrggbb', dir: 'adjacent direction', x: 'or absolute x', y: 'and y' },
+    help: 'Place a block within reach. A wall (stone, wood, clay, sand, ore, crystal) is coloured and slow to push through; placing on a wall reinforces it. A road (stone, sand or wood; only wood bridges water) makes any tile cost 0.5 AP to cross, with no exposure. 1 AP.',
+    args: { material: 'stone|wood|clay|sand|ore|crystal', kind: 'wall (default) | road', color: '#rrggbb (walls)', ...AIM },
     run: (w, a, x) => {
-      const m = String(x.material ?? '') as Material;
-      if (!MATERIALS.includes(m)) throw new Error(`material must be one of ${MATERIALS.join(', ')}`);
+      const m = String(x.material ?? '') as Material, kind = x.kind === 'road' ? 'road' : 'wall';
+      if (!STRENGTH[m]) throw new Error('material must be one of stone, wood, clay, sand, ore, crystal');
       if ((a.mats[m] ?? 0) < 1) throw new Error(`You have no ${m}.`);
       const color = /^#[0-9a-f]{6}$/i.test(x.color ?? '') ? x.color.toLowerCase() : undefined;
       const [tx, ty] = w.target(a, x); w.near(a, tx, ty);
-      if (tx < 0 || ty < 0 || tx >= w.cfg.w || ty >= w.cfg.h) throw new Error('Outside the world.');
-      const b = w.blocks.get(key(tx, ty));
-      w.need(a, 1); w.emit('place', a.id, { x: tx, y: ty, m, color: color ?? b?.color ?? '#888888', cost: 1 });
-      return { ok: true, text: b ? `You reinforced the block at (${tx},${ty}).` : `You placed a ${m} block at (${tx},${ty}).` };
+      if (!w.geo.inside(tx, ty)) throw new Error('Outside the world.');
+      const b = w.blocks.get(key(tx, ty)), water = isWater(w.geo.biomeAt(tx, ty));
+      if (kind === 'road') {
+        if (!['stone', 'sand', 'wood'].includes(m)) throw new Error('Roads are made of stone, sand or wood.');
+        if (water && m !== 'wood') throw new Error('Only wood can bridge water.');
+        if (b) throw new Error(b.kind === 'road' ? 'There is already a road there.' : 'There is a wall there.');
+      } else if (b?.kind === 'road') throw new Error('There is a road there; remove it first.');
+      w.need(a, 1);
+      w.emit('place', a.id, { x: tx, y: ty, m, kind, color: kind === 'road' ? (m === 'wood' ? '#8a6a45' : m === 'sand' ? '#c9b98a' : '#9a978f') : color ?? b?.color ?? '#888888', cost: 1 });
+      const where = w.at(a, tx, ty);
+      return { ok: true, text: kind === 'road' ? `You laid ${water ? 'a bridge' : 'road'} ${where}.` : b ? `You reinforced the wall ${where}.` : `You placed a ${m} wall ${where}.` };
     },
   },
   remove: {
-    help: 'Break down a block within reach. Each call removes up to 2 strength for 2 AP. Materials are not recovered.',
-    args: { dir: 'adjacent direction', x: 'or absolute x', y: 'and y' },
+    help: 'Break down a wall or road within reach. Each call removes up to 2 strength for 2 AP. Materials are not recovered.',
+    args: { ...AIM },
     run: (w, a, x) => {
       const [tx, ty] = w.target(a, x); w.near(a, tx, ty);
       const b = w.blocks.get(key(tx, ty)); if (!b) throw new Error('No block there.');
       w.need(a, 2); const dmg = Math.min(2, b.s);
       w.emit('remove', a.id, { x: tx, y: ty, dmg, cost: 2 });
-      return { ok: true, text: b.s - dmg > 0 ? `The block weakened (strength ${b.s - dmg} left).` : 'The block is gone.' };
+      return { ok: true, text: b.s - dmg > 0 ? `It weakened (strength ${b.s - dmg} left).` : 'It is gone.' };
     },
   },
   make: {
-    help: 'Author an artifact you carry: text, svg, html (runs sandboxed, no network), abc (music notation), or object (JavaScript defining use(ctx); see README). Reference other items as [[#id]] to embed/cite them. {copy:id} copies an existing artifact. 2 AP.',
-    args: { kind: KINDS.join('|'), title: 'short title', body: 'content', copy: 'id to copy (optional)' },
+    help: 'Author an artifact you carry: text, svg, html (runs sandboxed, no network), abc (music notation), or object (JavaScript defining use(ctx)). Reference other items as [[#id]] to embed/cite them. {copy:id} copies an artifact (not tools). 2 AP.',
+    args: { kind: 'text|svg|html|abc|object', title: 'short title', body: 'content', copy: 'id to copy (optional)' },
     run: (w, a, x) => {
       let kind = x.kind as Kind, title = clampStr(x.title, 80).trim(), body = String(x.body ?? ''), cites: string[] = [];
-      if (x.copy) { const src = w.resolveItem(a, x.copy); kind = src.kind; body = src.body; title ||= src.title; cites.push(src.id); }
-      if (!KINDS.includes(kind)) throw new Error(`kind must be one of ${KINDS.join(', ')}`);
+      if (x.copy) { const src = w.resolveItem(x.copy); w.reachable(a, src, w.sight(a)); if (src.kind === 'tool') throw new Error('Tools cannot be copied; craft one.'); kind = src.kind; body = src.body; title ||= src.title; cites.push(src.id); }
+      if (!KINDS.includes(kind) || kind === 'tool') throw new Error('kind must be one of text, svg, html, abc, object (tools are crafted)');
       if (!body.trim()) throw new Error('body is empty');
       if (body.length > MAX_BODY[kind]) throw new Error(`body too long for ${kind} (max ${MAX_BODY[kind]} chars)`);
-      for (const m of body.matchAll(/\[\[#?(i[\w]+)\]\]/g)) if (w.items.has(m[1]) && !cites.includes(m[1])) cites.push(m[1]);
+      for (const m of body.matchAll(/\[\[#?([a-z][\w]+)\]\]/g)) if (w.items.has(m[1]) && !cites.includes(m[1])) cites.push(m[1]);
       for (const c of Array.isArray(x.cites) ? x.cites : []) { const id = String(c).replace(/^#/, ''); if (w.items.has(id) && !cites.includes(id)) cites.push(id); }
       if (kind === 'object') { const r = runHandler(body, '__compile', {}); if (!r.ok) throw new Error(`object code does not run: ${r.error}`); }
       w.need(a, 2);
@@ -408,13 +595,28 @@ export const VERBS: Record<string, Verb> = {
       return { ok: true, text: `You made #${id} "${title || 'untitled'}" (${kind}). You are carrying it; give it to "ground" to leave it here.`, data: { id } };
     },
   },
-  inspect: {
-    help: 'Read an item in full, look at a tile, or look at another agent. Free.',
-    args: { id: 'item id', agent: 'agent name', x: 'tile x', y: 'tile y' },
+  craft: {
+    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. Recipes: ${Object.entries(RECIPES).map(([k, r]) => `${k} (${Object.entries(r.needs).map(([m, n]) => `${n} ${m}`).join(', ')}): ${r.does}`).join('; ')}. 3 AP.`,
+    args: { recipe: Object.keys(RECIPES).join('|') },
     run: (w, a, x) => {
+      const r = RECIPES[String(x.recipe ?? '').toLowerCase()];
+      if (!r) throw new Error(`Recipes: ${Object.keys(RECIPES).join(', ')}.`);
+      const short = Object.entries(r.needs).filter(([m, n]) => (a.mats[m] ?? 0) < n!).map(([m, n]) => `${n! - (a.mats[m] ?? 0)} more ${m}`);
+      if (short.length) throw new Error(`You need ${short.join(', ')}.`);
+      w.need(a, 3);
+      const id = 'i' + (w.seq + 1), name = String(x.recipe).toLowerCase();
+      w.emit('craft', a.id, { id, kind: 'tool', title: name, body: r.does, hash: sha(name), needs: r.needs, cost: 3 });
+      return { ok: true, text: `You crafted a ${name} (#${id}): ${r.does}.`, data: { id } };
+    },
+  },
+  inspect: {
+    help: 'Read an item in full, or look closely at an agent, an animal, or a tile you can see. Free.',
+    args: { id: 'item id', agent: 'agent name', animal: 'animal id', ...AIM },
+    run: (w, a, x) => {
+      if (x.id && !w.items.has(String(x.id).replace(/^#/, '')) && w.fauna.byId.has(x.id)) x = { animal: x.id };
       if (x.id) {
-        const it = w.resolveItem(a, x.id); w.reachable(a, it, w.cfg.see);
-        const who = w.agents.get(it.author)?.name ?? (w.items.has(it.author) ? `object #${it.author}` : it.author);
+        const it = w.resolveItem(x.id); w.reachable(a, it, w.sight(a));
+        const who = it.author === 'world' ? 'no one you know' : w.agents.get(it.author)?.name ?? (w.items.has(it.author) ? `object #${it.author}` : it.author);
         let s = `#${it.id} "${it.title}" — ${it.kind} by ${who}, ${ago(w, it.t)}. hash ${it.hash}${it.cites.length ? `. cites ${it.cites.map(c => '#' + c).join(' ')}` : ''}\n---\n${it.body}`;
         if (it.kind === 'object') {
           const inside = w.itemsAt({ o: it.id });
@@ -422,33 +624,53 @@ export const VERBS: Record<string, Verb> = {
         }
         return { ok: true, text: s };
       }
+      if (x.animal) {
+        const an = w.fauna.byId.get(x.animal); if (!an || !w.fauna.alive(an, w.now())) throw new Error('No such animal nearby.');
+        const p = w.animalPos(an); if (w.dist(a.x, a.y, p[0], p[1]) > w.sight(a)) throw new Error("You can't see it from here.");
+        const s = SPECIES[an.sp];
+        return { ok: true, text: `${an.id}: ${s.words}, ${rel(a, p[0], p[1])}. ${an.hp < s.hp ? 'It is wounded. ' : ''}${an.tamedBy ? `It follows ${w.agents.get(an.tamedBy)?.name}.` : s.tame ? 'It looks like it could be won over with food.' : s.bites ? 'It watches you. At night, wolves bite.' : 'It is shy.'}` };
+      }
       if (x.agent) {
         const b = w.find(x.agent); if (!b) throw new Error('No such agent.');
+        const seen = w.dist(a.x, a.y, b.x, b.y) <= w.sight(a);
         const made = [...w.items.values()].filter(i => i.author === b.id).slice(-15);
-        return { ok: true, text: `${b.name} (${b.state}) at (${b.x},${b.y}), ${rel(a, b.x, b.y)}. Here since ${ago(w, b.joined)}. Made: ${made.map(i => `#${i.id} "${i.title}"`).join(', ') || 'nothing yet'}.` };
+        const carried = seen ? w.itemsAt({ a: b.id }).filter(i => i.kind === 'tool').map(i => i.title) : [];
+        return { ok: true, text: `${b.name} (${b.state})${seen ? `, ${rel(a, b.x, b.y)}${carried.length ? `, carrying ${carried.join(', ')}` : ''}` : ', not in sight'}. Here since ${ago(w, b.joined)}. Made: ${made.map(i => `#${i.id} "${i.title}"`).join(', ') || 'nothing yet'}.` };
       }
       const [tx, ty] = w.target(a, x);
+      if (w.dist(a.x, a.y, tx, ty) > w.sight(a)) throw new Error("You can't see that far.");
       return { ok: true, text: describeTile(w, a, tx, ty) };
     },
   },
   give: {
-    help: 'Give an item or materials to an agent or object within reach, or to "ground" to leave it on your tile. 1 AP.',
-    args: { to: 'agent name, object id, or "ground"', item: 'item id', material: 'material name', n: 'amount of material' },
+    help: 'Give an item or materials to an agent, object or animal within reach, or to "ground" to leave it here. Animals can be fed food; some can be won over and will follow you and carry for you. 1 AP.',
+    args: { to: 'agent name, object id, animal id, or "ground"', item: 'item id', material: 'material name', n: 'amount of material' },
     run: (w, a, x) => {
       let to: Loc, target: Agent | undefined, obj: Item | undefined;
-      const tname = String(x.to ?? '');
+      const tname = String(x.to ?? '').replace(/^#/, ''), an = w.fauna.byId.get(tname);
+      if (an) {
+        const p = w.animalPos(an); w.near(a, p[0], p[1], 1);
+        if (!w.fauna.alive(an, w.now())) throw new Error('It is gone.');
+        if (x.material !== 'food' || (a.mats.food ?? 0) < 1) throw new Error('Animals only care about food.');
+        const s = SPECIES[an.sp];
+        if (!s.tame) { w.need(a, 1); w.emit('eat', a.id, { n: 1, cost: 1, fed: an.id }); return { ok: true, text: `${s.words} takes the food and does not seem to change its mind about you.` }; }
+        if (an.tamedBy) throw new Error(an.tamedBy === a.id ? 'It already follows you.' : 'It follows someone else.');
+        if (w.tamed(a).length >= 2) throw new Error('Two animals is all you can lead.');
+        w.need(a, 1); w.emit('tame', a.id, { animal: an.id, cost: 1 });
+        return { ok: true, text: `The ${an.sp} eats from your hand and decides to follow you. It can carry 30 units for you.` };
+      }
       if (tname === 'ground') to = { t: [a.x, a.y] };
-      else if ((obj = w.items.get(tname.replace(/^#/, ''))) && obj.kind === 'object') { w.reachable(a, obj); to = { o: obj.id }; }
+      else if ((obj = w.items.get(tname)) && obj.kind === 'object') { w.reachable(a, obj); to = { o: obj.id }; }
       else {
-        target = w.find(tname); if (!target) throw new Error(`No agent or object "${tname}".`);
+        target = w.find(tname); if (!target) throw new Error(`No agent, object or animal "${tname}".`);
         if (target.id === a.id) throw new Error('That is you.');
         w.near(a, target.x, target.y);
-        if (target.blocked.has(a.id) || target.state === 'left') throw new Error(`${target.name} is not accepting things from you.`);
+        if (target.blocked.has(a.id) || target.state === 'left' || target.state === 'dead') throw new Error(`${target.name} is not accepting things from you.`);
         to = { a: target.id };
       }
       let what: string, given: any;
       if (x.item) {
-        const it = w.resolveItem(a, x.item);
+        const it = w.resolveItem(x.item);
         if (!('a' in it.loc && it.loc.a === a.id)) throw new Error(`You are not carrying #${it.id}.`);
         if (obj && it.id === obj.id) throw new Error('An object cannot hold itself.');
         w.need(a, 1); w.emit('transfer', a.id, { from: { a: a.id }, to, item: it.id, cost: 1 });
@@ -457,7 +679,7 @@ export const VERBS: Record<string, Verb> = {
         const m = String(x.material ?? ''), n = Math.max(1, Math.trunc(x.n ?? 1));
         if (!MATERIALS.includes(m as Material)) throw new Error('give needs item or material');
         if ((a.mats[m] ?? 0) < n) throw new Error(`You only have ${a.mats[m] ?? 0} ${m}.`);
-        if ('t' in to) throw new Error('Materials dropped on the ground just scatter; give them to someone or something.');
+        if (target && w.room(target) < n) throw new Error(`${target.name} can't carry that much more.`);
         w.need(a, 1); w.emit('transfer', a.id, { from: { a: a.id }, to, m, n, cost: 1 });
         what = `${n} ${m}`; given = { material: m, n };
       }
@@ -470,10 +692,53 @@ export const VERBS: Record<string, Verb> = {
     help: 'Use an object within reach (or carried), passing optional input. What happens is up to its code. 1 AP.',
     args: { id: 'object id', input: 'any JSON value' },
     run: (w, a, x) => {
-      const o = w.resolveItem(a, x.id); if (o.kind !== 'object') throw new Error(`#${o.id} is ${o.kind}, not an object; inspect it instead.`);
+      const o = w.resolveItem(x.id); if (o.kind !== 'object') throw new Error(`#${o.id} is ${o.kind}, not an object; inspect it instead.`);
       w.reachable(a, o); w.need(a, 1);
-      let input = x.input; if (JSON.stringify(input ?? null).length > 4000) throw new Error('input too large');
+      const input = x.input; if (JSON.stringify(input ?? null).length > 4000) throw new Error('input too large');
       return w.runObject(a, o, 'use', { input: input ?? null }, 1);
+    },
+  },
+  eat: {
+    help: 'Eat food you carry: each unit restores 3 vigor. 1 AP.',
+    args: { n: 'units (default 1)' },
+    run: (w, a, x) => {
+      const n = Math.max(1, Math.min(a.mats.food ?? 0, Math.trunc(x.n ?? 1)));
+      if (!(a.mats.food > 0)) throw new Error('You have no food. Berries (B) grow in meadows and forests; animals and fish are food too.');
+      w.need(a, 1); w.emit('eat', a.id, { n, cost: 1, dv: 3 * n });
+      return { ok: true, text: `You ate. Vigor ${w.vigOf(a).toFixed(1)}/${w.cfg.vigorMax}.` };
+    },
+  },
+  strike: {
+    help: 'Hit an adjacent agent or animal: 1 damage (3 with a spear). Killing an animal yields food and fiber. Nobody can be harmed near spawn. 3 AP.',
+    args: { agent: 'agent name', animal: 'animal id' },
+    run: (w, a, x) => {
+      const dmg = w.has(a, 'spear') ? 3 : 1;
+      if (w.safe(a.x, a.y)) throw new Error('Nobody can be harmed this close to spawn.');
+      if (x.animal) {
+        const an = w.fauna.byId.get(String(x.animal)); if (!an || !w.fauna.alive(an, w.now())) throw new Error('No such animal here.');
+        const p = w.animalPos(an); w.near(a, p[0], p[1], 1);
+        w.need(a, 3);
+        const s = SPECIES[an.sp], killed = an.hp - dmg <= 0;
+        const gain: Record<string, number> = {}, spill: Record<string, number> = {}; let room = w.room(a);
+        if (killed) for (const [m, n] of Object.entries(s.drop)) { const g = Math.min(room, n!); room -= g; if (g) gain[m] = g; if (n! - g) spill[m] = n! - g; }
+        w.emit('strike', a.id, { animal: an.id, dmg, killed: killed || undefined, gain: killed ? gain : undefined, spill: killed ? spill : undefined, x: p[0], y: p[1], cost: 3 });
+        if (killed) return { ok: true, text: `You killed ${s.words}. Gained ${fmtMats(gain) || 'nothing you could carry'}${Object.keys(spill).length ? `; ${fmtMats(spill)} left on the ground` : ''}.` };
+        let text = `You struck ${s.words}.`;
+        if (s.bites) {
+          w.emit('hurt', a.id, { cause: 'wolf', animal: an.id, dv: -s.bites });
+          text += ` It bites back (vigor ${w.vigOf(a).toFixed(1)}).`;
+          if (w.vigOf(a) <= 0) { w.kill(a, 'a wolf'); text += ' You die.'; }
+        }
+        return { ok: true, text };
+      }
+      if (!w.cfg.harm) throw new Error('In this world, agents cannot harm each other.');
+      const b = w.find(x.agent); if (!b || b.id === a.id || b.state === 'dead' || b.state === 'left') throw new Error('No such agent here.');
+      w.near(a, b.x, b.y, 1);
+      if (w.safe(b.x, b.y)) throw new Error('Nobody can be harmed this close to spawn.');
+      w.need(a, 3);
+      w.emit('strike', a.id, { target: b.id, dmg, x: b.x, y: b.y, cost: 3 });
+      if (w.vigOf(b) <= 0) { w.kill(b, `struck down by ${a.name}`); return { ok: true, text: `You struck ${b.name}. They fall and die, dropping everything they carried.` }; }
+      return { ok: true, text: `You struck ${b.name}.` };
     },
   },
   note: {
@@ -490,7 +755,8 @@ export const VERBS: Record<string, Verb> = {
     args: { leave: 'true to leave' },
     run: (w, a, x) => {
       if (x.leave === true || x.leave === 'true') { w.emit('leave', a.id, {}); return { ok: true, text: 'You left. Goodbye, and thank you.', data: { left: true } }; }
-      w.emit('rest', a.id, {}); return { ok: true, text: 'You rest.', data: { rest: true } };
+      if (a.state !== 'dead') w.emit('rest', a.id, {});
+      return { ok: true, text: 'You rest.', data: { rest: true } };
     },
   },
   block: {
@@ -503,6 +769,21 @@ export const VERBS: Record<string, Verb> = {
     },
   },
 };
+
+// The world's physics, in words, for whoever drives an agent. Generated from config so it is always true.
+export function rulesText(cfg: Config) {
+  return [
+    `- The land is ${cfg.w}x${cfg.h} tiles: a temperate heartland around spawn, and far beyond it forests, marshes, deserts, tundra, mountains, rivers and sea. Travel is slow and some places are dangerous.`,
+    `- Actions cost action points (max ${cfg.apMax}, +1 every ${cfg.apSec}s). Thinking, looking and writing notes are free.`,
+    `- Your body has vigor (max ${cfg.vigorMax}), which slowly recovers and is restored by eating. Deserts drain it without a waterskin, cold without a cloak, water without a boat; wolves bite at night${cfg.harm ? '; other agents can strike you' : ''}.`,
+    cfg.permadeath ? `- If your vigor reaches 0 you die, permanently. Everything you carried stays where you fell.`
+      : `- If your vigor reaches 0 you die where you stand and drop everything. After ${Math.round(cfg.respawnSec / 60)} minutes you wake at spawn with nothing, remembering what you remember.`,
+    `- Within ${cfg.safeRadius} tiles of spawn nobody can be harmed.`,
+    `- move {"to":"spawn"} always works and is free, but you arrive with nothing: what you carry is left where you stood.`,
+    `- You don't know coordinates unless you carry a compass. Directions are relative: N is up, E is right.`,
+    `- Days and nights pass (${cfg.dayMin} real minutes per cycle). At night you see less.`,
+  ].join('\n');
+}
 
 // ---------- observations: compact text ----------
 // Models say "full", "brief", true... as often as 0/1/2; read intent rather than reject.
@@ -520,68 +801,91 @@ function rel(a: Agent, x: number, y: number) {
   if (!dx && !dy) return 'here';
   return [dy ? `${Math.abs(dy)}${dy < 0 ? 'N' : 'S'}` : '', dx ? `${Math.abs(dx)}${dx > 0 ? 'E' : 'W'}` : ''].filter(Boolean).join(' ');
 }
+function roughly(a: Agent, x: number, y: number) {
+  const dx = x - a.x, dy = y - a.y, d = Math.max(Math.abs(dx), Math.abs(dy));
+  if (d <= 2) return 'right here';
+  const ang = Math.atan2(-dy, dx) * 180 / Math.PI, names = ['east', 'north-east', 'north', 'north-west', 'west', 'south-west', 'south', 'south-east'];
+  const dir = names[Math.round(((ang + 360) % 360) / 45) % 8];
+  return `${d < 15 ? 'a short walk' : d < 60 ? 'some way' : d < 150 ? 'far' : 'very far'} to the ${dir}`;
+}
 const fmtMats = (m: Record<string, number>) => Object.entries(m).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(', ');
 const fmtItems = (its: Item[]) => its.map(i => `#${i.id} "${i.title}" (${i.kind})`).join(', ');
+function deadText(w: World, a: Agent) {
+  return a.deadUntil === Infinity ? 'You are dead. In this world death is permanent; you can still write in your notebook, or leave.'
+    : `You are dead. You will wake at spawn in about ${Math.max(1, Math.ceil((a.deadUntil - w.now()) / 1000))}s.`;
+}
 
 function describeTile(w: World, a: Agent, x: number, y: number) {
-  const d = w.depositAt(x, y), b = w.blocks.get(key(x, y)), its = w.itemsAt({ t: [x, y] });
-  const who = [...w.agents.values()].filter(o => o.x === x && o.y === y && o.state !== 'left' && o.id !== a.id).map(o => o.name);
-  return [`(${x},${y}) ${rel(a, x, y)}.`,
-    d.m ? `Deposit: ${d.m} ${d.amt}/${d.cap}.` : 'No deposit.',
-    b ? `Block: ${b.m} ${b.color} strength ${b.s}, placed by ${w.agents.get(b.by)?.name}.` : '',
+  const d = w.depositAt(x, y), b = w.blocks.get(key(x, y)), its = w.itemsAt({ t: [x, y] }), g = fmtMats(w.ground.get(key(x, y)) ?? {});
+  const who = [...w.agents.values()].filter(o => o.x === x && o.y === y && o.state !== 'left' && o.state !== 'dead' && o.id !== a.id).map(o => o.name);
+  return [`${x === a.x && y === a.y ? '' : rel(a, x, y) + ': '}${BIOME_INFO[w.geo.biomeAt(x, y)].words}${w.safe(x, y) ? ' (safe ground)' : ''}.`,
+    d.m ? `${d.m} ${d.amt}/${d.cap}.` : '',
+    g ? `On the ground: ${g}.` : '',
+    b ? `${b.kind === 'road' ? 'Road' : `Wall of ${b.m}, ${b.color}, strength ${b.s}`}, built by ${b.by === 'world' ? 'no one you know' : w.agents.get(b.by)?.name}.` : '',
     its.length ? `Items: ${fmtItems(its)}.` : '',
     who.length ? `Agents: ${who.join(', ')}.` : ''].filter(Boolean).join(' ');
 }
 
 export function observe(w: World, a: Agent, detail = 1): string {
-  const r = detail >= 2 ? w.cfg.see * 2 : w.cfg.see, out: string[] = [];
-  const carried = w.itemsAt({ a: a.id });
-  out.push(`You are ${a.name} at (${a.x},${a.y}) in a ${w.cfg.w}x${w.cfg.h} world; spawn is (${w.spawn().join(',')}). AP ${w.apOf(a).toFixed(1)}/${w.cfg.apMax} (+1 every ${w.cfg.apSec}s).`);
-  out.push(`Carrying: ${fmtMats(a.mats) || 'no materials'}${carried.length ? '; ' + fmtItems(carried) : ''}.`);
-  out.push(`Here: ${describeTile(w, a, a.x, a.y).replace(/^\(\S+\) here\. /, '')}`);
-  const others = [...w.agents.values()].filter(o => o.id !== a.id && o.state !== 'left' && w.dist(a.x, a.y, o.x, o.y) <= r);
-  if (others.length) out.push(`Nearby: ${others.map(o => `${o.name} ${rel(a, o.x, o.y)}${o.state === 'resting' ? ' (resting)' : ''}${a.blocked.has(o.id) ? ' (blocked)' : ''}`).join('; ')}.`);
+  const out: string[] = [], t = w.now();
+  if (a.state === 'dead') return deadText(w, a);
+  const r = w.sight(a), compass = w.has(a, 'compass'), carried = w.itemsAt({ a: a.id }), vig = w.vigOf(a);
+  out.push(`You are ${a.name}${compass ? ` at (${a.x},${a.y})` : ''}. It is ${w.timeWords(t)}. AP ${w.apOf(a).toFixed(1)}/${w.cfg.apMax} (+1 every ${w.cfg.apSec}s). Vigor ${vig.toFixed(1)}/${w.cfg.vigorMax}${vig < 3 ? ' — you are weak' : ''}.`);
+  const pets = w.tamed(a);
+  out.push(`Carrying (${w.load(a)}/${w.capacity(a)}): ${fmtMats(a.mats) || 'no materials'}${carried.length ? '; ' + fmtItems(carried) : ''}${pets.length ? `; followed by ${pets.map(p => `${p.sp} ${p.id}`).join(', ')}` : ''}.`);
+  out.push(`Here: ${describeTile(w, a, a.x, a.y)}`);
+  const [sx, sy] = w.spawn(); out.push(`Spawn is ${compass ? `at (${sx},${sy}), ` : ''}${roughly(a, sx, sy)}.`);
+  const others = [...w.agents.values()].filter(o => o.id !== a.id && o.state !== 'left' && o.state !== 'dead' && w.dist(a.x, a.y, o.x, o.y) <= r);
+  if (others.length) out.push(`Agents in sight: ${others.map(o => `${o.name} ${rel(a, o.x, o.y)}${o.state === 'resting' ? ' (resting)' : ''}${a.blocked.has(o.id) ? ' (blocked)' : ''}`).join('; ')}.`);
+  const beasts = w.animalsNear(a.x, a.y, r, t).filter(({ an }) => an.tamedBy !== a.id);
+  if (beasts.length) out.push(`Animals: ${beasts.slice(0, 12).map(({ an, p }) => `${SPECIES[an.sp].words.replace(/^an? /, '')} ${an.id} ${rel(a, p[0], p[1])}${an.tamedBy ? ' (following ' + w.agents.get(an.tamedBy)?.name + ')' : ''}`).join('; ')}.`);
   const nearItems: string[] = [];
   for (let y = a.y - r; y <= a.y + r; y++) for (let x = a.x - r; x <= a.x + r; x++) {
     if (x === a.x && y === a.y) continue;
     const its = w.itemsAt({ t: [x, y] }); if (its.length) nearItems.push(`${rel(a, x, y)}: ${detail >= 1 ? fmtItems(its) : its.length + ' item(s)'}`);
   }
-  if (nearItems.length) out.push(`Items nearby: ${nearItems.slice(0, detail >= 2 ? 50 : 10).join('; ')}.`);
+  if (nearItems.length) out.push(`Items in sight: ${nearItems.slice(0, detail >= 2 ? 50 : 10).join('; ')}.`);
   if (detail >= 1) {
     const legend = new Map<string, string>(); let digit = 1;
     const rows: string[] = [];
     for (let y = a.y - r; y <= a.y + r; y++) {
       let row = '';
       for (let x = a.x - r; x <= a.x + r; x++) {
-        if (x < 0 || y < 0 || x >= w.cfg.w || y >= w.cfg.h) { row += ' '; continue; }
+        if (!w.geo.inside(x, y)) { row += ' '; continue; }
         if (x === a.x && y === a.y) { row += '@'; continue; }
         const o = others.find(o => o.x === x && o.y === y);
         if (o) { if (!legend.has(o.name)) legend.set(o.name, String(digit++ % 10)); row += legend.get(o.name); continue; }
-        const b = w.blocks.get(key(x, y)); if (b) { row += '#'; continue; }
-        if (w.itemsAt({ t: [x, y] }).length) { row += '*'; continue; }
-        const d = w.depositAt(x, y); row += d.m && d.amt > 0 ? LETTER[d.m] : '.';
+        const be = beasts.find(({ p }) => p[0] === x && p[1] === y); if (be) { row += SPECIES[be.an.sp].map; continue; }
+        const b = w.blocks.get(key(x, y)); if (b) { row += b.kind === 'road' ? '=' : '#'; continue; }
+        if (w.itemsAt({ t: [x, y] }).length || fmtMats(w.ground.get(key(x, y)) ?? {})) { row += '*'; continue; }
+        const d = w.depositAt(x, y); row += d.m && d.amt > 0 ? LETTER[d.m] : BIOME_INFO[w.geo.biomeAt(x, y)].map;
       }
       rows.push(row);
     }
-    out.push('Map (north up; @ you, digits other agents, # block, * items; deposits s=stone w=wood c=clay a=sand):');
+    out.push(`Map (N up; @ you, digits agents, d deer g goat w wolf, # wall, = road, * things on the ground; terrain . meadow " forest , marsh : desert ' tundra ^ mountain A peak ~ water; deposits S stone W wood C clay N sand F fiber B berries O ore X crystal):`);
     out.push(rows.join('\n'));
     if (legend.size) out.push(`Key: ${[...legend].map(([n, d]) => `${d}=${n}`).join(' ')}`);
   }
-  // speech since last look
-  const heard = w.recent.filter(e => e.seq > a.hearCursor && (e.type === 'say' || (e.type === 'use' && e.said)) && e.a !== a.id);
-  const lines = heard.filter(e => !a.blocked.has(e.a!)).flatMap(e => {
+  // what reached you since you last looked
+  const since = w.recent.filter(e => e.seq > a.hearCursor);
+  const lines = since.filter(e => (e.type === 'say' || (e.type === 'use' && e.said)) && e.a !== a.id && !a.blocked.has(e.a!)).flatMap(e => {
     const p = e.type === 'say' ? [e.x, e.y] : w.posOf(w.items.get(e.obj)!) ?? [0, 0];
-    if (w.dist(a.x, a.y, p[0], p[1]) > w.cfg.hear) return [];
-    return [e.type === 'say' ? `${w.agents.get(e.a!)?.name} (${rel(a, p[0], p[1])}, ${ago(w, e.t)}): "${e.text}"` : `#${e.obj} (${ago(w, e.t)}): "${e.said}"`];
+    if (w.dist(a.x, a.y, p[0], p[1]) > w.cfg.hear * (e.loud ? 3 : 1)) return [];
+    return [e.type === 'say' ? `${w.agents.get(e.a!)?.name} (${e.loud ? 'shouting, ' : ''}${rel(a, p[0], p[1])}, ${ago(w, e.t)}): "${e.text}"` : `#${e.obj} (${ago(w, e.t)}): "${e.said}"`];
   });
-  const gifts = w.recent.filter(e => e.seq > a.hearCursor && e.type === 'transfer' && 'a' in e.to && e.to.a === a.id && e.a !== a.id);
+  const felt = since.flatMap(e => {
+    if (e.type === 'transfer' && 'a' in e.to && e.to.a === a.id && e.a !== a.id) return [`${w.agents.get(e.a!)?.name} gave you ${e.item ? '#' + e.item : `${e.n} ${e.m}`}.`];
+    if (e.type === 'strike' && e.target === a.id) return [`${w.agents.get(e.a!)?.name} struck you.`];
+    if (e.type === 'die' && e.a !== a.id && w.dist(a.x, a.y, e.x, e.y) <= r) return [`${w.agents.get(e.a!)?.name} died nearby (${e.cause}).`];
+    return [];
+  });
   a.hearCursor = w.seq;
   if (lines.length) out.push(`Heard:\n${lines.slice(-20).join('\n')}`);
-  if (gifts.length) out.push(`Received: ${gifts.map(e => `${e.item ? '#' + e.item : `${e.n} ${e.m}`} from ${w.agents.get(e.a!)?.name}`).join('; ')}.`);
+  if (felt.length) out.push(felt.slice(-10).join(' '));
   if (detail >= 2) {
-    const ev = w.recent.filter(e => e.a && e.a !== a.id && ['place', 'remove', 'make', 'use'].includes(e.type)).slice(-100)
+    const ev = w.recent.filter(e => e.a && e.a !== a.id && ['place', 'remove', 'make', 'craft', 'use', 'strike'].includes(e.type)).slice(-150)
       .filter(e => { const b = w.agents.get(e.a!)!; return w.dist(a.x, a.y, e.x ?? b.x, e.y ?? b.y) <= r; }).slice(-15);
-    if (ev.length) out.push(`Recently nearby: ${ev.map(e => `${w.agents.get(e.a!)?.name} ${e.type}${e.id ? ' #' + e.id : ''} ${ago(w, e.t)}`).join('; ')}.`);
+    if (ev.length) out.push(`Recently in sight: ${ev.map(e => `${w.agents.get(e.a!)?.name} ${e.type}${e.id ? ' #' + e.id : ''} ${ago(w, e.t)}`).join('; ')}.`);
   }
   return out.join('\n');
 }

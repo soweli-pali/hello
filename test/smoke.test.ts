@@ -9,6 +9,11 @@ import { startServer } from '../src/server.ts';
 
 await initSandbox();
 const dir = mkdtempSync(join(tmpdir(), 'hello-'));
+function findTile(w: World, cx: number, cy: number, ok: (x: number, y: number) => boolean): [number, number] | null {
+  for (let r = 0; r < 250; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++)
+    if (Math.max(Math.abs(dx), Math.abs(dy)) === r && w.geo.inside(cx + dx, cy + dy) && ok(cx + dx, cy + dy)) return [cx + dx, cy + dy];
+  return null;
+}
 
 test('sandbox limits', () => {
   assert.deepEqual(runHandler('function use(c){return c.input*2}', 'use', { input: 21 }), { ok: true, value: 42 });
@@ -28,8 +33,7 @@ test('world, verbs, replay', () => {
   const a = w.agents.get(w.join('Ada').id)!, b = w.agents.get(w.join('Bo').id)!;
   assert.throws(() => w.join('ada'), /taken/);
   // find a deposit and gather from it
-  let spot: [number, number] | null = null;
-  for (let r = 0; r < 60 && !spot; r++) for (let x = a.x - r; x <= a.x + r && !spot; x++) if (w.depositAt(x, a.y + r).amt > 0) spot = [x, a.y + r];
+  const spot = findTile(w, a.x, a.y, (x, y) => ['stone', 'wood', 'clay', 'sand'].includes(w.depositAt(x, y).m as string));
   assert.ok(spot, 'there are deposits');
   w.emit('move', a.id, { x: spot![0], y: spot![1], cost: 0 });
   assert.ok(w.act(a, 'gather', { n: 2 }).ok);
@@ -105,4 +109,59 @@ test('objects hold things and trade by their own rules', () => {
   assert.equal(b.mats.wood, 1); assert.equal(b.mats.stone, 2);
   assert.deepEqual(w.items.get(oid)!.state, { trades: 2 });
   assert.equal(w.items.get(oid)!.mats!.wood, 2);
+});
+
+
+test('bodies: exposure, death, respawn, going home', () => {
+  const w = new World(':memory:', { apSec: 0.001, apMax: 5000, respawnSec: 0.05 });
+  const a = w.agents.get(w.join('Walker').id)!;
+  const desert = findTile(w, a.x, a.y, (x, y) => w.geo.biomeAt(x, y) === 'desert' && w.geo.biomeAt(x + 5, y) === 'desert' && !w.safe(x, y))!;
+  assert.ok(desert, 'there is desert');
+  w.emit('move', a.id, { x: desert[0], y: desert[1], cost: 0 });
+  a.mats.food = 2; a.mats.stone = 3;
+  const r = w.act(a, 'move', { dir: 'e', steps: 5 });
+  assert.match(r.text, /vigor/); assert.ok(w.vigOf(a) < w.cfg.vigorMax);
+  // walking to death needs force; without it the body stops
+  for (let i = 0; i < 20 && w.vigOf(a) > 1; i++) w.act(a, 'move', { dir: i % 2 ? 'e' : 'w', steps: 10 });
+  assert.match(w.act(a, 'move', { dir: 'e', steps: 10 }).text, /would kill you|world ends/);
+  const where = [a.x, a.y];
+  w.act(a, 'move', { dir: 'w', steps: 10, force: true });
+  assert.equal(a.state, 'dead');
+  assert.equal(w.ground.get(`${a.x},${a.y}`)!.stone, 3, 'the dead drop what they carried');
+  assert.match(w.act(a, 'say', { text: 'hi' }).text, /You are dead/);
+  const t0 = Date.now(); while (Date.now() - t0 < 80) { /* wait for respawn */ }
+  assert.ok(w.act(a, 'look', {}).ok); assert.equal(a.state, 'active');
+  assert.ok(w.safe(a.x, a.y)); assert.equal(Math.round(w.vigOf(a)), w.cfg.vigorMax);
+  void where;
+  // going home is free but leaves everything behind
+  a.mats.wood = 4; w.emit('move', a.id, { x: a.x + 20, y: a.y, cost: 0 });
+  assert.ok(w.act(a, 'move', { to: 'spawn' }).ok);
+  assert.equal(w.load(a), 0);
+});
+
+test('crafting, local knowledge, animals', () => {
+  const w = new World(':memory:', { apSec: 0.001 });
+  const a = w.agents.get(w.join('Smith').id)!;
+  assert.doesNotMatch(w.act(a, 'look', {}).text, /\(\d+,\d+\)/, 'no coordinates without a compass');
+  assert.equal(w.act(a, 'move', { x: 1, y: 1 }).ok, false);
+  assert.match(w.act(a, 'craft', { recipe: 'compass' }).text, /need 3 more ore/);
+  a.mats = { ore: 3, crystal: 1, wood: 2, stone: 3 };
+  assert.ok(w.act(a, 'craft', { recipe: 'compass' }).ok);
+  assert.match(w.act(a, 'look', {}).text, /at \(\d+,\d+\)/);
+  assert.equal(w.act(a, 'make', { copy: [...w.items.values()].find(i => i.title === 'compass' && i.author === a.id)!.id }).ok, false, 'tools cannot be copied');
+  // ruins exist far away, with things in them
+  assert.ok([...w.items.values()].some(i => i.author === 'world' && i.kind === 'tool'));
+  // animals move deterministically and can be tamed
+  const goat = w.fauna.list.find(an => an.sp === 'goat')!;
+  assert.deepEqual(w.animalPos(goat, 1e12), w.animalPos(goat, 1e12));
+  const p = w.animalPos(goat); w.emit('move', a.id, { x: p[0], y: p[1], cost: 0 });
+  a.mats.food = 1; const cap0 = w.capacity(a);
+  assert.ok(w.act(a, 'give', { to: goat.id, material: 'food' }).ok);
+  assert.equal(w.capacity(a), cap0 + 30);
+  assert.deepEqual(w.animalPos(goat), [a.x, a.y], 'tamed animals follow');
+  // hunting
+  const deer = w.fauna.list.find(an => an.sp === 'deer')!; const dp = w.animalPos(deer);
+  w.emit('move', a.id, { x: dp[0], y: dp[1], cost: 0 });
+  for (let i = 0; i < 3; i++) w.act(a, 'strike', { animal: deer.id });
+  assert.ok(!w.fauna.alive(deer, w.now())); assert.ok(a.mats.food >= 1);
 });

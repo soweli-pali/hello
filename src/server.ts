@@ -4,7 +4,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { World, VERBS, MATERIALS } from './world.ts';
+import { World, VERBS, MATERIALS, RECIPES, rulesText } from './world.ts';
+import { BIOMES } from './geo.ts';
+import { SPECIES } from './fauna.ts';
 import type { Ev, Item } from './world.ts';
 import { initSandbox } from './sandbox.ts';
 
@@ -17,11 +19,12 @@ const RAW_CSP = "sandbox allow-scripts; default-src 'none'; img-src 'self' data:
 export function itemMeta(w: World, it: Item) {
   const p = w.posOf(it);
   const holder = 'a' in it.loc ? { agent: it.loc.a } : 'o' in it.loc ? { object: it.loc.o } : { tile: it.loc.t };
-  return { id: it.id, kind: it.kind, title: it.title, author: it.author, authorName: w.agents.get(it.author)?.name ?? '#' + it.author, t: it.t, hash: it.hash, cites: it.cites, pos: p, ...holder, size: it.body.length,
+  return { id: it.id, kind: it.kind, title: it.title, author: it.author, authorName: it.author === 'world' ? 'the world' : w.agents.get(it.author)?.name ?? '#' + it.author, t: it.t, hash: it.hash, cites: it.cites, pos: p, ...holder, size: it.body.length,
     excerpt: it.kind === 'text' || it.kind === 'abc' ? it.body.replace(/\[\[#?i\w+\]\]/g, '↳').slice(0, 140) : undefined };
 }
 export function agentMeta(w: World, a: any) {
-  return { id: a.id, name: a.name, x: a.x, y: a.y, state: a.state, joined: a.joined, lastSeen: a.lastSeen, meta: a.meta };
+  return { id: a.id, name: a.name, x: a.x, y: a.y, state: a.state, joined: a.joined, lastSeen: a.lastSeen, meta: a.meta, deaths: a.deaths,
+    tools: w.itemsAt({ a: a.id }).filter(i => i.kind === 'tool').map(i => i.title) };
 }
 // Big bodies are dropped from streamed events; fetch the item instead.
 export function slimEvent(e: Ev) {
@@ -37,16 +40,15 @@ export function worldSnapshot(w: World) {
   return {
     cfg: w.cfg, seq: w.seq, now: w.now(), materials: MATERIALS,
     agents: [...w.agents.values()].map(a => agentMeta(w, a)),
-    blocks: [...w.blocks].map(([k, b]) => { const [x, y] = k.split(',').map(Number); return [x, y, b.color, b.m, b.s]; }),
-    tileItems,
+    blocks: [...w.blocks].map(([k, b]) => { const [x, y] = k.split(',').map(Number); return [x, y, b.color, b.m, b.s, b.kind]; }),
+    tileItems, piles: [...w.ground].filter(([, g]) => Object.values(g).some(n => n > 0)).map(([k]) => k.split(',').map(Number)),
+    phase: w.phase(), biomes: BIOMES, spawn: w.spawn(), safeRadius: w.cfg.safeRadius,
   };
 }
-export function terrainBytes(w: World) {
-  const buf = new Uint8Array(w.cfg.w * w.cfg.h);
-  for (let y = 0; y < w.cfg.h; y++) for (let x = 0; x < w.cfg.w; x++) {
-    const t = w.terrain(x, y); buf[y * w.cfg.w + x] = t.m ? (MATERIALS.indexOf(t.m) + 1) * 16 + Math.min(15, t.cap) : 0;
-  }
-  return Buffer.from(buf).toString('base64');
+export function terrainBytes(w: World) { return Buffer.from(w.geo.bytes()).toString('base64'); }
+export function animalsNow(w: World) {
+  const t = w.now();
+  return w.fauna.list.filter(an => w.fauna.alive(an, t)).map(an => { const [x, y] = w.animalPos(an, t); return { id: an.id, sp: an.sp, x, y, tamedBy: an.tamedBy }; });
 }
 
 function send(res: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}) {
@@ -85,6 +87,8 @@ export function startServer(w: World, port: number, host: string) {
 
       // ---- viewer (read-only) ----
       if (p === '/api/world') return send(res, 200, worldSnapshot(w));
+      if (p === '/api/animals') return send(res, 200, { phase: w.phase(), animals: animalsNow(w) });
+      if (p === '/api/rules') return send(res, 200, { text: rulesText(w.cfg), cfg: w.cfg, recipes: RECIPES, species: SPECIES });
       if (p === '/api/terrain') return send(res, 200, { w: w.cfg.w, h: w.cfg.h, data: terrainCache ||= terrainBytes(w) });
       if (p === '/api/tile') {
         const x = Number(url.searchParams.get('x')), y = Number(url.searchParams.get('y'));
@@ -92,7 +96,8 @@ export function startServer(w: World, port: number, host: string) {
         const speech = w.recent.filter(e => (e.type === 'say' && w.dist(e.x, e.y, x, y) <= w.cfg.hear) || (e.type === 'use' && e.said && w.dist(...(w.posOf(w.items.get(e.obj)!) ?? [0, 0]) as [number, number], x, y) <= w.cfg.hear)).slice(-30)
           .map(e => ({ t: e.t, who: e.type === 'say' ? w.agents.get(e.a!)?.name : '#' + e.obj, text: e.text ?? e.said }));
         return send(res, 200, {
-          x, y, deposit: w.depositAt(x, y), block: w.blocks.get(k) ? { ...w.blocks.get(k), byName: w.agents.get(w.blocks.get(k)!.by)?.name } : null,
+          x, y, biome: w.geo.biomeAt(x, y), safe: w.safe(x, y), ground: w.ground.get(k) ?? {}, deposit: w.depositAt(x, y), block: w.blocks.get(k) ? { ...w.blocks.get(k), byName: w.blocks.get(k)!.by === 'world' ? 'the world' : w.agents.get(w.blocks.get(k)!.by)?.name } : null,
+          animals: animalsNow(w).filter(an => w.dist(an.x, an.y, x, y) <= 2),
           items: w.itemsAt({ t: [x, y] }).map(i => itemMeta(w, i)),
           agents: [...w.agents.values()].filter(a => w.dist(a.x, a.y, x, y) <= 1 && a.state !== 'left').map(a => agentMeta(w, a)),
           speech,
@@ -104,7 +109,7 @@ export function startServer(w: World, port: number, host: string) {
         const events = w.recent.filter(e => e.a === a.id).slice(-200).map(slimEvent);
         const made = [...w.items.values()].filter(i => i.author === a.id).map(i => itemMeta(w, i));
         const carrying = w.itemsAt({ a: a.id }).map(i => itemMeta(w, i));
-        return send(res, 200, { ...agentMeta(w, a), ap: w.apOf(a), mats: a.mats, notebook: a.notebook, blocked: [...a.blocked], made, carrying, events });
+        return send(res, 200, { ...agentMeta(w, a), ap: w.apOf(a), vig: w.vigOf(a), vigMax: w.cfg.vigorMax, load: w.load(a), capacity: w.capacity(a), deadUntil: a.deadUntil, pets: w.tamed(a).map(p => p.id), mats: a.mats, notebook: a.notebook, blocked: [...a.blocked], made, carrying, events });
       }
       if ((m = p.match(/^\/api\/item\/(\w+)(\/raw)?$/))) {
         const it = w.items.get(m[1]); if (!it) return send(res, 404, { error: 'no item' });
