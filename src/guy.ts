@@ -1,12 +1,15 @@
 // hello-guy: run little guys written by anyone, each in its own locked-down container.
 //   hello-guy add <folder>     build it, give it a body in the world, and start it (again: rebuild and restart)
+//   hello-guy add <folder> --at x,y   (it asks for anything missing: where it arrives, API keys)
+//   hello-guy key SOME_API_KEY       set or replace a key in /etc/hello.env, typed without showing
 //   hello-guy list | logs <name> [-f] | stop <name> | start <name> | remove <name>
 // A guy is a folder with guy.json and code: a Dockerfile, or main.py (+ requirements.txt), or main.js (+ package.json).
 // Its container gets HELLO_SERVER, HELLO_TOKEN, HELLO_NAME and only the keys guy.json asks for (from /etc/hello.env).
 // It sits on a sealed network: the only way out is the egress proxy, which lets it reach the world and the hosts
 // in its "allow" list, nothing else. Memory, CPU and processes are capped; it runs as an unprivileged user,
 // with a read-only filesystem except /tmp and /data (its own folder, kept across restarts).
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync, openSync, closeSync, createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -14,13 +17,32 @@ import { randomBytes } from 'node:crypto';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = process.env.HELLO_HOME ?? '/var/lib/hello', GUYS = join(HOME, 'guys'), NET = 'hello-guys', EGRESS = 'hello-egress';
-const env: Record<string, string> = Object.fromEntries(readFileSync(process.env.HELLO_ENV ?? '/etc/hello.env', 'utf8').split('\n')
+const ENVF = process.env.HELLO_ENV ?? '/etc/hello.env';
+const env: Record<string, string> = Object.fromEntries(readFileSync(ENVF, 'utf8').split('\n')
   .map(l => /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*(#.*)?$/.exec(l)).filter(Boolean).map(m => [m![1], m![2].replace(/^["']|["']$/g, '')]));
 const WORLD = `${env.HOST ?? '127.0.0.1'}:${env.PORT ?? '7777'}`;
 const docker = (...a: string[]) => execFileSync('docker', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const dockerLoud = (...a: string[]) => { const r = spawnSync('docker', a, { stdio: 'inherit' }); if (r.status) throw new Error(`docker ${a[0]} failed`); };
 const exists = (kind: 'container' | 'network', n: string) => spawnSync('docker', [kind, 'inspect', n], { stdio: 'ignore' }).status === 0;
 const die = (s: string): never => { console.error(s); process.exit(1); };
+
+// Questions at the terminal (read from /dev/tty, so it works even when this runs inside a pasted script).
+const tty = () => { try { closeSync(openSync('/dev/tty', 'r')); return true; } catch { return false; } };
+function ask(q: string, hidden = false): Promise<string> {
+  process.stdout.write(q);
+  if (hidden) spawnSync('stty', ['-echo'], { stdio: [openSync('/dev/tty', 'r'), 'inherit', 'ignore'] });
+  return new Promise(res => {
+    const input = createReadStream('/dev/tty'), rl = createInterface({ input });
+    rl.once('line', l => { rl.close(); input.destroy(); if (hidden) { spawnSync('stty', ['echo'], { stdio: [openSync('/dev/tty', 'r'), 'inherit', 'ignore'] }); process.stdout.write('\n'); } res(l.trim()); });
+  });
+}
+async function setKey(k: string) {
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(k)) die('key names look like SOME_API_KEY');
+  let v = ''; while (!v) v = await ask(`Paste ${k} (it won't show; it's saved only in ${ENVF}): `, true);
+  const lines = readFileSync(ENVF, 'utf8').split('\n').filter(l => !new RegExp(`^\\s*${k}\\s*=`).test(l));
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  writeFileSync(ENVF, lines.concat(`${k}=${v}`, '').join('\n')); env[k] = v; console.log(`saved ${k}`);
+}
 
 type Guy = { name: string; at?: [number, number]; look?: Record<string, string>; keys?: string[]; allow?: string[]; memory?: string; cpus?: number; env?: Record<string, string> };
 function readGuy(dir: string): Guy {
@@ -58,9 +80,13 @@ async function join_(g: Guy, dir: string) {
   writeFileSync(tf, JSON.stringify(j)); return j;
 }
 
-async function add(folder: string) {
-  const srcIn = resolve(folder), g = readGuy(srcIn), dir = join(GUYS, g.name), src = join(dir, 'src'), data = join(dir, 'data');
-  const missing = (g.keys ?? []).filter(k => !env[k]); if (missing.length) die(`add ${missing.join(', ')} to /etc/hello.env first`);
+async function add(folder: string, at?: string) {
+  const srcIn = resolve(folder), g = readGuy(srcIn);
+  if (at) { const m = /^\s*(\d+)\s*[, ]\s*(\d+)\s*$/.exec(at); if (!m) return die('--at wants x,y'); g.at = [Number(m[1]), Number(m[2])]; }
+  const dir = join(GUYS, g.name), src = join(dir, 'src'), data = join(dir, 'data'), joined = existsSync(join(dir, 'token.json'));
+  // ask for what's missing, when someone is at the keyboard
+  if (!g.at && !joined && tty()) { const a = await ask(`Where should ${g.name} arrive? Tap a tile in the viewer and type x,y (or press Enter for the default): `); const m = /(\d+)\D+(\d+)/.exec(a); if (m) g.at = [Number(m[1]), Number(m[2])]; }
+  for (const k of (g.keys ?? []).filter(k => !env[k])) { if (!tty()) die(`add ${k}=... to ${ENVF} first (or run this in a terminal to be asked)`); await setKey(k); }
   mkdirSync(data, { recursive: true }); rmSync(src, { recursive: true, force: true }); cpSync(srcIn, src, { recursive: true });
   const df = dockerfileFor(src); if (df) writeFileSync(join(src, 'Dockerfile'), df);
   writeFileSync(join(dir, 'guy.json'), JSON.stringify(g, null, 1));
@@ -82,7 +108,8 @@ async function add(folder: string) {
 
 const [cmd, arg, flag] = process.argv.slice(2), c = (n?: string) => `guy-${n ?? die('which guy?')}`;
 switch (cmd) {
-  case 'add': await add(arg ?? die('usage: hello-guy add <folder>')); break;
+  case 'add': { const i = process.argv.indexOf('--at'); await add(arg ?? die('usage: hello-guy add <folder> [--at x,y]'), i > 0 ? process.argv[i + 1] : undefined); break; }
+  case 'key': await setKey(arg ?? die('usage: hello-guy key SOME_API_KEY')); console.log('Guys that use it pick it up when they are next added or restarted (hello-guy add <folder>).'); break;
   case 'list': console.log(docker('ps', '-a', '--filter', 'label=hello.guy=1', '--format', 'table {{.Names}}\t{{.Status}}\t{{.RunningFor}}').replace(/guy-/g, '')); break;
   case 'logs': dockerLoud('logs', '--tail', '200', ...(flag === '-f' ? ['-f'] : []), c(arg)); break;
   case 'stop': docker('stop', c(arg)); console.log('stopped (its body stays in the world, idle)'); break;

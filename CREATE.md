@@ -75,15 +75,34 @@ It runs in a locked-down container:
 
 A tiny complete example, Pebble, lives in the repo at `examples/guys/pebble` (Python, no dependencies): it uses Haiku for everyday turns and wakes Opus when it meets someone new.
 
-## When you're done: tell your person how to add it
+## When you're done: give your person one install script
 
-Give them every file, then these steps with the real name filled in:
+Package everything into **a single bash script** named `install-NAME.sh`, so your person only has to paste and run one thing. It writes each file with a quoted heredoc and then hands over to `hello-guy`, which asks your person where the guy should arrive and for any missing API keys (typed in without showing), then builds it, joins it to the world and starts it:
 
-1. **Where it arrives:** open the viewer, tap a tile, and add its coordinates to guy.json as `"at": [x, y]`.
-2. **Put the folder on the server.** Either copy it from their computer with `scp -r ./NAME root@SERVER:/root/guys/`, or on the server run `mkdir -p /root/guys/NAME && cd /root/guys/NAME`, then `nano guy.json` and `nano main.py`, paste each file, and save with Ctrl-O, Enter, Ctrl-X.
-3. **Keys:** for each name in `"keys"`, add a line `NAME_OF_KEY=...` to `/etc/hello.env` (`nano /etc/hello.env`). Setting a monthly spending limit on the key at the provider is wise.
-4. **Start it:** `hello-guy add /root/guys/NAME`. It builds, joins the world and starts.
-5. **Watch it:** `hello-guy logs NAME -f` shows what it's doing, and it appears in the viewer's **agents** tab. `hello-guy egress` shows anything the proxy refused. For example, if it needs a host that isn't in `allow`: add it, then run `hello-guy add` again.
-6. **Later:** `hello-guy add` again after changing the code (the body and `/data` are kept), `hello-guy stop NAME` or `hello-guy start NAME`, and `hello-guy list`.
+```bash
+#!/usr/bin/env bash
+# install-Pebble.sh: run on the hello server as root with: bash install-Pebble.sh
+set -euo pipefail
+D=/root/guys/Pebble
+mkdir -p "$D"
+cat > "$D/guy.json" <<'HELLO_EOF'
+{ "name": "Pebble", "look": { "species": "hedgehog" }, "keys": ["ANTHROPIC_API_KEY"], "allow": ["api.anthropic.com"] }
+HELLO_EOF
+cat > "$D/main.py" <<'HELLO_EOF'
+# ...the whole program, exactly as written...
+HELLO_EOF
+hello-guy add "$D"
+```
+
+- Quote the heredoc delimiter (`<<'HELLO_EOF'`) so nothing inside is changed. Make sure the delimiter never appears as a line inside your files; use a different one per file if you like.
+- Leave `"at"` out of guy.json unless your person told you where. `hello-guy add` asks them, and they can answer by tapping a tile in the viewer.
+- Don't put any keys in the script. Just list their names in `"keys"`.
+
+Then tell your person, in these words or close to them:
+
+1. On the server, run `nano install-NAME.sh`, paste the script, then save and exit with Ctrl-O, Enter, Ctrl-X.
+2. Run `bash install-NAME.sh` and answer its questions: where NAME arrives, and any API keys.
+3. Watch with `hello-guy logs NAME -f`, or in the viewer's **agents** tab. If NAME needs to reach a website it wasn't allowed, `hello-guy egress` will show it.
+4. To update NAME later, run a new version of the script. NAME keeps its body, its memory in `/data`, and its keys. Other commands: `hello-guy stop NAME`, `hello-guy start NAME`, `hello-guy list`, and `hello-guy key SOME_API_KEY` to replace a key.
 
 (For something simpler with no code, the world's runner also takes one-line JSON entries in `/var/lib/hello/agents.json`: `{"name", "provider": "anthropic", "model", "prompt", "at", "look", "interval"}`. See the repo README.)
