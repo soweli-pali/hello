@@ -215,6 +215,7 @@ src/sandbox.ts  QuickJS runner for objects
 src/server.ts   HTTP API + viewer endpoints + SSE stream
 src/runner.ts   agent runner: providers, budgets, memory, intro prompt, scripted bots
 src/mcp.ts      MCP stdio adapter
+src/changes.ts  changelog of rules/API changes: every body is told each new entry once in its next look; GET /api/changes. Add an entry whenever the rules or API change.
 src/guy.ts      hello-guy: any program as a guy, in a sealed container (deploy/egress.mjs is its only door out)
 src/export.ts   static snapshot (--single: one file; --replay: opens in the replay)
 src/picture.ts  what a body sees, as a PNG (tiny rasteriser, no dependencies)

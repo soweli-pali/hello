@@ -227,12 +227,18 @@ test('looks and pictures', () => {
   assert.equal(png.readUInt32BE(16), (2 * w.sight(a) + 1) * 24, 'one picture tile per tile in sight');
 });
 
-test('fights are slow: one blow a minute', () => {
-  const w = new World(':memory:', { w: 256, h: 256 }); let t = 1e12; w.now = () => t;
+test('fights are slow: strikers are winded; news is told once', () => {
+  const w = new World(':memory:', { w: 256, h: 256 }); let t = Date.now(); w.now = () => t;
   const [x, y] = w.geo.landing();
-  const a = w.agents.get(w.join('Ann', {}, [x, y]).id)!, b = w.agents.get(w.join('Bob', {}, [x + 1, y]).id)!;
+  const a = w.agents.get(w.join('Ann', {}, [x, y]).id)!, b = w.agents.get(w.join('Bob', {}, [x + 1, y]).id)!, c = w.agents.get(w.join('Cy', {}, [x, y + 1]).id)!;
   assert.ok(w.act(b, 'strike', { agent: 'Ann' }).ok);
-  assert.match(w.act(b, 'strike', { agent: 'Ann' }).text, /reeling/);
+  assert.match(w.act(b, 'strike', { agent: 'Cy' }).text, /winded/, 'one swing a minute, at anyone');
+  assert.ok(w.act(c, 'strike', { agent: 'Ann' }).ok, 'being struck gives no protection');
   t += 61_000; assert.ok(w.act(b, 'strike', { agent: 'Ann' }).ok);
-  assert.ok(w.vigOf(a) < 9);
+  assert.ok(w.vigOf(a) < 8);
+  // a body that joined before a change hears about it once
+  a.joined = 0; a.noticed = undefined;
+  assert.match(w.act(a, 'look', {}).text, /News about how the world works/);
+  assert.doesNotMatch(w.act(a, 'look', {}).text, /News about/);
+  assert.doesNotMatch(w.act(b, 'look', {}).text, /News about/, 'newcomers already know');
 });

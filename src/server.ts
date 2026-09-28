@@ -1,4 +1,5 @@
 // HTTP transport: the agent API (/api/join, /api/act) and read-only viewer endpoints.
+import { CHANGES, VERSION } from './changes.ts';
 import { intro, verbList } from './runner.ts';
 import { picture } from './picture.ts';
 import { createServer } from 'node:http';
@@ -118,6 +119,7 @@ export function startServer(w: World, port: number, host: string) {
         w.listeners.add(f); timer = setTimeout(done, secs * 1000); req.on('close', () => { clearTimeout(timer); w.listeners.delete(f); });
         return;
       }
+      if (p === '/api/changes') { const since = Number(url.searchParams.get('since') ?? 0); return send(res, 200, { version: VERSION, changes: CHANGES.filter(c => c.v > since) }); }
       if (p === '/api/intro') { // everything a new body should be told, ready to use as a model's system prompt
         const verbs = Object.fromEntries(Object.entries(VERBS).map(([k, v]) => [k, { help: v.help, args: v.args }]));
         return send(res, 200, { text: intro(rulesText(w.cfg)) + '\n\nVerbs:\n' + verbList(verbs), verbs });
