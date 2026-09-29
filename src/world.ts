@@ -206,7 +206,7 @@ export class World {
     switch (e.type) {
       case 'join': {
         const a: Agent = { id: e.a!, name: e.name, x: e.x, y: e.y, ap: this.cfg.apMax, apT: e.t, vig: this.cfg.vigorMax, vigT: e.t, mats: {},
-          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq, discovers: !!e.discover, knows: new Set() };
+          notebook: '', blocked: new Set(), state: 'active', deadUntil: 0, lastBite: 0, deaths: 0, home: [e.x, e.y], joined: e.t, lastSeen: e.t, meta: e.meta ?? {}, hearCursor: e.seq, discovers: this.cfg.discovery, knows: new Set() };
         this.agents.set(a.id, a); this.byName.set(a.name.toLowerCase(), a.id); break;
       }
       case 'move': ag!.x = e.x; ag!.y = e.y; break;
@@ -214,10 +214,11 @@ export class World {
       case 'gather': {
         if (e.loose) { const g = this.ground.get(key(e.x, e.y))!; g[e.m] -= e.n; }
         else if (e.m !== 'food' || !e.fish) this.taken.set(key(e.x, e.y), { amt: this.depositAt(e.x, e.y, e.t).amt - e.n, t: e.t });
-        ag!.mats[e.m] = (ag!.mats[e.m] ?? 0) + e.n; break;
+        ag!.mats[e.m] = (ag!.mats[e.m] ?? 0) + e.n; ag!.knows!.add('mat:' + e.m); break;
       }
       case 'place': case 'build': {
-        if (ag) for (const [m, n] of Object.entries((e.needs ?? {}) as Record<string, number>)) ag.mats[m] -= n;
+        if (ag) for (const [m, n] of Object.entries((e.needs ?? {}) as Record<string, number>)) { ag.mats[m] -= n; ag.knows!.add('mat:' + m); }
+        if (ag) ag.knows!.add('block:' + e.m);
         const k = key(e.x, e.y), bt = BLOCKS[e.m] ?? BLOCKS.stone, layer = bt.roof ? this.roofs : this.blocks, b = layer.get(k);
         if (b) { b.s += bt.s; if (bt.fire) b.t = e.t; } // same block again reinforces; wood on a fire keeps it burning
         else layer.set(k, { m: e.m, color: e.color ?? blockColor(e.m, e.dye), s: bt.s, by: e.a ?? 'world', t: e.t, kind: bt.floor ? 'road' : bt.roof ? 'roof' : 'wall', dye: e.dye });
@@ -228,7 +229,7 @@ export class World {
         b.s -= e.dmg; if (b.s <= 0) layer.delete(k); break;
       }
       case 'make': case 'craft': {
-        if (e.type === 'craft') for (const [m, n] of Object.entries(e.needs as Record<string, number>)) ag!.mats[m] -= n;
+        if (e.type === 'craft') { for (const [m, n] of Object.entries(e.needs as Record<string, number>)) { ag!.mats[m] -= n; ag!.knows!.add('mat:' + m); } ag!.knows!.add('recipe:' + e.title); }
         const it: Item = { id: e.id, kind: e.kind ?? 'tool', title: e.title, body: e.body, author: e.author ?? e.a, t: e.t,
           hash: e.hash, cites: e.cites ?? [], loc: e.loc ?? { a: e.a } };
         if (it.kind === 'object') { it.state = null; it.mats = {}; }
@@ -292,6 +293,7 @@ export class World {
     if (tr.item) { const it = this.items.get(tr.item)!; const old = it.loc; it.loc = tr.to; this.index(it, old); return; }
     const from = this.holder(tr.from), to = this.holder(tr.to);
     from[tr.m] -= tr.n; to[tr.m] = (to[tr.m] ?? 0) + tr.n;
+    if ('a' in tr.to) this.agents.get(tr.to.a)!.knows!.add('mat:' + tr.m); // what you've been given, you've seen
   }
   private holder(l: Loc): Record<string, number> {
     if ('a' in l) return this.agents.get(l.a)!.mats;
@@ -434,7 +436,7 @@ export class World {
     const id = 'a' + (this.seq + 1);
     if (at && !(this.geo.inside(at[0], at[1]))) throw new Error('that place is outside the world');
     if (meta.look !== undefined) meta = { ...meta, look: (globalThis as any).Critters.clean(meta.look) }; // how the body looks: see /api/rules looks
-    const e = this.emit('join', id, { name, ...(at ? this.roomNear(Math.trunc(at[0]), Math.trunc(at[1])) : this.spawnSpot()), meta, discover: this.cfg.discovery || undefined });
+    const e = this.emit('join', id, { name, ...(at ? this.roomNear(Math.trunc(at[0]), Math.trunc(at[1])) : this.spawnSpot()), meta });
     return { id: e.a!, token: this.issueToken(e.a!) };
   }
   spawnSpot(): { x: number; y: number } { const [sx, sy] = this.spawn(); return this.roomNear(sx + Math.floor(Math.random() * 5) - 2, sy + Math.floor(Math.random() * 5) - 2); }
@@ -523,8 +525,8 @@ export class World {
 
   // ---------- knowledge: what a body knows how to make ----------
   // A body knows a recipe or a block once it has seen every material it needs (in sight, on the ground, or in hand).
-  seen(a: Agent, m: string) { return !a.discovers || a.knows!.has('mat:' + m) || (a.mats[m] ?? 0) > 0; }
-  // (anything learned under the brief earlier rules, recorded as recipe:/block:/dye:, stays known)
+  seen(a: Agent, m: string) { return !a.discovers || a.knows!.has('mat:' + m) || (a.mats[m] ?? 0) > 0; } // discovers is false only in worlds without discovery
+  // (what a body has crafted or placed, and anything learned under the brief earlier rules, stays known)
   knowsRecipe(a: Agent, r: string) { const R = RECIPES[r]; return !!R && (a.knows?.has('recipe:' + r) || Object.keys(R.needs).every(m => this.seen(a, m))); }
   knowsBlock(a: Agent, b: string) { const bt = BLOCKS[b]; return !!bt && (a.knows?.has('block:' + b) || Object.keys(bt.needs).every(m => this.seen(a, m))); }
   knowsDye(a: Agent, d: string) { return a.knows?.has('dye:' + d) || this.seen(a, d); }

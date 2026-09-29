@@ -257,6 +257,8 @@ test('discovery: you know what you have seen the makings of', () => {
   assert.doesNotMatch(w.act(a, 'look', {}).text, /for the first time/);
   assert.match(w.act(a, 'look', { detail: 2 }).text, /Recipes you know:.*compass/);
   assert.equal(w.knowsBlock(a, 'marble'), false);
-  const old = w.agents.get(w.join('Old', {}, [x, y + 1]).id)!; old.discovers = false;
-  assert.ok(w.knowsRecipe(old, 'spyglass') && w.knowsBlock(old, 'marble'), 'bodies from before discovery know everything');
+  // what a body has done counts: crafted tools, placed blocks, what it gathered or was given
+  const b = w.agents.get(w.join('Bo', {}, [x, y + 1]).id)!; b.mats = { ore: 2, crystal: 2, sand: 3 };
+  assert.ok(w.act(b, 'craft', { recipe: 'spyglass' }).ok);
+  b.mats = {}; assert.ok(w.knowsRecipe(b, 'spyglass')); assert.ok(w.knowsRecipe(b, 'compass'), 'ore and crystal were seen');
 });
