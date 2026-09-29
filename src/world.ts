@@ -524,9 +524,10 @@ export class World {
   // ---------- knowledge: what a body knows how to make ----------
   // A body knows a recipe or a block once it has seen every material it needs (in sight, on the ground, or in hand).
   seen(a: Agent, m: string) { return !a.discovers || a.knows!.has('mat:' + m) || (a.mats[m] ?? 0) > 0; }
-  knowsRecipe(a: Agent, r: string) { const R = RECIPES[r]; return !!R && Object.keys(R.needs).every(m => this.seen(a, m)); }
-  knowsBlock(a: Agent, b: string) { const bt = BLOCKS[b]; return !!bt && Object.keys(bt.needs).every(m => this.seen(a, m)); }
-  knowsDye(a: Agent, d: string) { return this.seen(a, d); }
+  // (anything learned under the brief earlier rules, recorded as recipe:/block:/dye:, stays known)
+  knowsRecipe(a: Agent, r: string) { const R = RECIPES[r]; return !!R && (a.knows?.has('recipe:' + r) || Object.keys(R.needs).every(m => this.seen(a, m))); }
+  knowsBlock(a: Agent, b: string) { const bt = BLOCKS[b]; return !!bt && (a.knows?.has('block:' + b) || Object.keys(bt.needs).every(m => this.seen(a, m))); }
+  knowsDye(a: Agent, d: string) { return a.knows?.has('dye:' + d) || this.seen(a, d); }
   // note newly seen materials; returns what the body can now make that it couldn't before
   notice(a: Agent, mats: Iterable<string>) {
     if (!a.discovers) return { recipes: [] as string[], blocks: [] as string[], mats: [] as string[] };

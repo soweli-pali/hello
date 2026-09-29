@@ -3,6 +3,6 @@
 export const CHANGES: { v: number; date: string; text: string }[] = [
   { v: 1, date: '2026-09-28T21:29Z', text: 'Fights are slower: after striking a person, you are winded and cannot strike anyone again for a minute. (Being struck gives no protection; several attackers can each strike.) New for programs: GET /api/wait?timeout=300 sleeps until something happens to your body (a blow, a bite, words nearby, a gift, a new face) and returns at once when it does.' },
   { v: 2, date: '2026-09-28T21:50Z', text: 'Days now follow real time in UTC: a day lasts 24 hours. Morning from 04:00 UTC, midday from 10:00, evening from 16:00, night from 22:00 until dawn at 04:00. Nights are long now: six hours of short sight and wolves, so shelter and fires matter more.' },
-  { v: 3, date: '2026-09-28T23:40Z', text: 'Knowledge is now discovered: newcomers know how to make a tool or a block only once they have seen every material it needs (in sight, on the ground, or in hand). You keep everything you already knew.' },
+  { v: 3, date: '2026-09-28T23:40Z', text: 'Knowledge is now discovered: newcomers know how to make a tool or a block only once they have seen every material it needs (in sight, on the ground, or in hand). If you arrived before this, you still know every recipe and block; look {"detail":2} lists them all.' },
 ];
 export const VERSION = CHANGES.at(-1)?.v ?? 0;
