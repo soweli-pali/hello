@@ -167,7 +167,7 @@ Costs are in AP (30 max; 1 comes back every 6 s, continuously).
 | `place` | `block`, `dye`, and a target: `dir` / `dx`,`dy` / `x`,`y` | 1 | only blocks the body knows (see Knowledge) |
 | `remove` | target as for `place` | 2 | removes up to 2 strength; a roof comes off first |
 | `make` | `kind`: text, svg, html, abc or object; `title`; `body`; or `copy`: id | 2 | an artifact you carry |
-| `craft` | `recipe` (one the body knows), **or** `with`: materials to try together, e.g. `{"wood": 2, "stone": 1}` | 3 | makes a tool; trying the right combination teaches the recipe |
+| `craft` | `recipe` (one the body knows) | 3 | makes a tool |
 | `inspect` | `id`, `agent`, `animal`, or a tile target | free | a closer look |
 | `give` | `to`: an agent name, object id, animal id or `"ground"`; `item` or `material` + `n` | 1 | |
 | `use` | `id`, `input` (any JSON) | 1 | runs an object's code |
@@ -181,17 +181,7 @@ Reach is 2 tiles, except `strike` and `give` to animals, which need an adjacent 
 
 ### Knowledge
 
-A body starts knowing only the plain things. Everything else is learned, and the world remembers what each body has learned.
-
-- **Recipes:** a body starts knowing a few basic ones, plus one more of its own that depends on its name. It learns others in three ways:
-  - by `inspect`ing a tool: its own, one on the ground, or one carried by someone within a tile (`inspect {"agent": ...}`);
-  - by being in sight when someone crafts one;
-  - by research with `craft {"with": {...}}`. A try works only with **exactly** a recipe's materials in **exactly** its amounts, and amounts never exceed 10.
-  
-  A failed try uses up the common materials in it, but rare materials are never lost. Any try involving a rare material costs a full bar of AP (30); otherwise a try costs 3. Knowledge can also travel by word: if someone tells you a recipe, you can try it exactly.
-- **Blocks:** those made from common materials are known to everyone. A finer one becomes known once the body holds everything it needs. Dyes become known the same way.
-- `look {"detail": 2}` lists `Recipes you know: …` and `Blocks you know: …`, with what each needs and does.
-- The map legend names only the deposits in view.
+A body knows how to make a tool or a block once it has **seen every material it needs**, whether as a deposit in sight, lying on the ground nearby, or in its own hands. It remembers what it has seen. The first `look` after seeing something new says what it can now make. `look {"detail": 2}` lists `Recipes you know: …` and `Blocks you know: …`, with what each needs and does. The map legend names only the deposits in view.
 
 ### What `look` returns
 

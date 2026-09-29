@@ -54,9 +54,6 @@ export const BLOCKS: Record<string, BlockType> = {
   skylight:  { needs: { sand: 2, wood: 1 }, s: 1, roof: true, color: '#cfe8ee', words: 'glass skylight roof' },
 };
 export const FIRE_MS = 4 * 3600_000;
-export const COMMON = new Set(['stone', 'wood', 'clay', 'sand', 'fiber', 'food']); // what every body knows the uses of
-export const BASIC = new Set(['pick', 'waterskin', 'cloak']); // recipes everyone knows: the basics of getting by
-export const MAX_TRY = 10; // amounts in a trial run from 1 to this
 export const WINDED_MS = 60_000; // after striking a person, a body can't strike anyone for a minute
 export const DYES: Record<string, string> = { ochre: '#b5532f', indigo: '#2f408c', shell: '#f2eadd' };
 function hexMix(cols: string[]) {
@@ -263,7 +260,6 @@ export class World {
       }
       case 'notice': ag!.noticed = e.v; break;
       case 'learn': ag!.knows!.add(e.what); break;
-      case 'tinker': for (const [m, n] of Object.entries((e.spent ?? {}) as Record<string, number>)) ag!.mats[m] -= n; break;
       case 'hurt': ag!.lastBite = e.cause === 'wolf' ? e.t : ag!.lastBite; break;
       case 'tame': { const an = this.fauna.byId.get(e.animal)!; an.tamedBy = e.a!; ag!.mats.food -= 1; break; }
       case 'die': {
@@ -526,17 +522,19 @@ export class World {
   }
 
   // ---------- knowledge: what a body knows how to make ----------
-  knowsRecipe(a: Agent, r: string) { return !a.discovers || BASIC.has(r) || r === this.birthRecipe(a) || a.knows!.has('recipe:' + r); }
-  // every newcomer arrives knowing one recipe beyond the basics, which one depending on who they are
-  birthRecipe(a: Agent) { const rest = Object.keys(RECIPES).filter(r => !BASIC.has(r)); let h = 0; for (const c of a.name) h = (Math.imul(h, 31) + c.charCodeAt(0)) | 0; return rest[Math.floor(hash(h, 91, this.cfg.seed) * rest.length)]; }
-  // plain blocks (from common materials) everyone knows; a fine one becomes clear once you hold what it needs
-  knowsBlock(a: Agent, b: string) {
-    const bt = BLOCKS[b]; if (!bt) return false;
-    if (!a.discovers || a.knows!.has('block:' + b) || Object.keys(bt.needs).every(m => COMMON.has(m))) return true;
-    if (Object.entries(bt.needs).every(([m, n]) => (a.mats[m] ?? 0) >= (n ?? 1))) { this.learn(a, 'block:' + b); return true; }
-    return false;
+  // A body knows a recipe or a block once it has seen every material it needs (in sight, on the ground, or in hand).
+  seen(a: Agent, m: string) { return !a.discovers || a.knows!.has('mat:' + m) || (a.mats[m] ?? 0) > 0; }
+  knowsRecipe(a: Agent, r: string) { const R = RECIPES[r]; return !!R && Object.keys(R.needs).every(m => this.seen(a, m)); }
+  knowsBlock(a: Agent, b: string) { const bt = BLOCKS[b]; return !!bt && Object.keys(bt.needs).every(m => this.seen(a, m)); }
+  knowsDye(a: Agent, d: string) { return this.seen(a, d); }
+  // note newly seen materials; returns what the body can now make that it couldn't before
+  notice(a: Agent, mats: Iterable<string>) {
+    if (!a.discovers) return { recipes: [] as string[], blocks: [] as string[], mats: [] as string[] };
+    const fresh = [...new Set(mats)].filter(m => !a.knows!.has('mat:' + m)); if (!fresh.length) return { recipes: [], blocks: [], mats: [] };
+    const had = (m: string) => a.knows!.has('mat:' + m), r0 = Object.keys(RECIPES).filter(r => Object.keys(RECIPES[r].needs).every(had)), b0 = Object.keys(BLOCKS).filter(b => Object.keys(BLOCKS[b].needs).every(had));
+    for (const m of fresh) this.learn(a, 'mat:' + m);
+    return { mats: fresh, recipes: Object.keys(RECIPES).filter(r => this.knowsRecipe(a, r) && !r0.includes(r)), blocks: Object.keys(BLOCKS).filter(b => this.knowsBlock(a, b) && !b0.includes(b)) };
   }
-  knowsDye(a: Agent, d: string) { return !a.discovers || a.knows!.has('dye:' + d) || ((a.mats[d] ?? 0) > 0 && (this.learn(a, 'dye:' + d), true)); }
   learn(a: Agent, what: string) { if (a.discovers && !a.knows!.has(what)) { this.emit('learn', a.id, { what }); return true; } return false; }
   recipeText(r: string) { const R = RECIPES[r]; return `${r} (${Object.entries(R.needs).map(([m, n]) => `${n} ${m}`).join(', ')}): ${R.does}`; }
   blockText(k: string) { const b = BLOCKS[k]; return `${k} (${Object.entries(b.needs).map(([m, n]) => `${n} ${m}`).join(' + ')}${b.floor ? ', floor' : ''}${b.roof ? ', roof' : ''}${b.door ? ', door' : ''}${b.fence ? ', fence' : ''}${b.dye ? ', takes dye' : ''}${b.glow ? ', glows' : ''}${b.heavy ? ', heavy' : ''}${b.fire ? ', fire' : ''})`; }
@@ -736,7 +734,7 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   place: {
-    help: `Place a block within reach. Building needs only the materials, no tools. Walls are slow to push through; placing the same wall again reinforces it. Floors are quick to cross, like roads, and a wooden floor bridges water. Roofs go on a layer above walls, floors or bare ground and must be within 3 tiles of a wall (big halls need pillars). A closed room (walls and doors all round, roofed over every tile inside) is shelter. Heavy blocks need someone else nearby to help lift. At most two people fit on one tile. Some blocks take dyes. Blocks made from common materials are known to everyone; finer ones become clear once you hold what they need. look {"detail":2} lists the blocks you know. 1 AP.`,
+    help: `Place a block within reach. Building needs only the materials, no tools. Walls are slow to push through; placing the same wall again reinforces it. Floors are quick to cross, like roads, and a wooden floor bridges water. Roofs go on a layer above walls, floors or bare ground and must be within 3 tiles of a wall (big halls need pillars). A closed room (walls and doors all round, roofed over every tile inside) is shelter. Heavy blocks need someone else nearby to help lift. At most two people fit on one tile. Some blocks take dyes. You know a block once you have seen every material it needs; look {"detail":2} lists the blocks you know. 1 AP.`,
     args: { block: 'a block you know', dye: 'optional: a dye you have, or several joined with +', ...AIM },
     run: (w, a, x) => { const [tx, ty] = w.target(a, x); return w.placeBlock(a, x.block ?? MAT_BLOCK[x.material] ?? x.material, x.dye, tx, ty); },
   },
@@ -770,42 +768,17 @@ export const VERBS: Record<string, Verb> = {
     },
   },
   craft: {
-    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. Everyone knows a few basic recipes and one more of their own; others are learned by examining a tool (inspect it), by watching someone make one, or by research: trying materials you carry with {"with": {"wood": 2, "stone": 1}}. A try works only with exactly a recipe's materials in exactly its amounts (never more than ${MAX_TRY} of anything). A failed try spoils the common materials in it; rare materials are never lost, but trying with them takes a full bar of AP. look {"detail":2} lists the recipes you know. 3 AP.`,
-    args: { recipe: 'a recipe you know', with: 'or materials to try combining, e.g. {"wood":2,"stone":1}' },
+    help: `Make a tool from materials. Tools work while carried and can be given, dropped or lost, but not copied. You know a recipe once you have seen every material it needs; look {"detail":2} lists the recipes you know. 3 AP.`,
+    args: { recipe: 'a recipe you know' },
     run: (w, a, x) => {
-      let name = String(x.recipe ?? '').toLowerCase(), invented = false;
-      if (!name && x.with && typeof x.with === 'object') {
-        const tried = Object.fromEntries(Object.entries(x.with as Record<string, unknown>).map(([m, n]) => [String(m).toLowerCase(), Math.trunc(Number(n) || 0)]).filter(([, n]) => (n as number) > 0)) as Record<string, number>;
-        if (!Object.keys(tried).length) throw new Error('Say which materials to try, e.g. {"with": {"wood": 2, "stone": 1}}.');
-        if (Object.values(tried).some(n => n > MAX_TRY)) throw new Error(`Recipes never need more than ${MAX_TRY} of anything.`);
-        const short = Object.entries(tried).filter(([m, n]) => (a.mats[m] ?? 0) < n).map(([m, n]) => `${n - (a.mats[m] ?? 0)} more ${m}`);
-        if (short.length) throw new Error(`You don't have that: you'd need ${short.join(', ')}.`);
-        // research: it works only with exactly a recipe's materials in exactly its amounts
-        const hit = Object.entries(RECIPES).find(([, r]) => Object.keys(r.needs).length === Object.keys(tried).length && Object.entries(r.needs).every(([m, n]) => tried[m] === n));
-        const rare = Object.keys(tried).some(m => !COMMON.has(m));
-        if (!hit) {
-          // a failed try uses up common materials; rare ones are never lost, but working with them takes a full bar of care
-          const cost = rare ? w.cfg.apMax : 3; w.need(a, cost);
-          const spent = Object.fromEntries(Object.entries(tried).filter(([m]) => COMMON.has(m)));
-          w.emit('tinker', a.id, { with: tried, spent, cost });
-          return { ok: true, text: `You try to fit ${fmtMats(tried)} together, but nothing comes of it.${Object.keys(spent).length ? ` The ${Object.keys(spent).join(' and ')} ${Object.keys(spent).length > 1 ? 'are' : 'is'} spoiled.` : ''}${rare ? ' The rarer things survive the attempt.' : ''}` };
-        }
-        w.need(a, rare ? w.cfg.apMax : 3);
-        name = hit[0]; invented = !w.knowsRecipe(a, name);
-        if (invented) w.learn(a, 'recipe:' + name);
-      } else if (!RECIPES[name] || !w.knowsRecipe(a, name)) {
-        const known = Object.keys(RECIPES).filter(k => w.knowsRecipe(a, k));
-        throw new Error(`You don't know how to make "${x.recipe ?? ''}". ${known.length ? `Recipes you know: ${known.join(', ')}.` : "You don't know any recipes yet."} You could try combining materials with {"with": {...}}.`);
-      } else {
-        const short = Object.entries(RECIPES[name].needs).filter(([m, n]) => (a.mats[m] ?? 0) < n!).map(([m, n]) => `${n! - (a.mats[m] ?? 0)} more ${m}`);
-        if (short.length) throw new Error(`You need ${short.join(', ')}.`);
-        w.need(a, 3);
-      }
-      const r = RECIPES[name], id = 'i' + (w.seq + 1);
-      w.emit('craft', a.id, { id, kind: 'tool', title: name, body: r.does, hash: sha(name), needs: r.needs, cost: x.with && !x.recipe && Object.keys(r.needs).some(m => !COMMON.has(m)) ? w.cfg.apMax : 3 });
-      // anyone watching learns how it's done
-      for (const o of w.agents.values()) if (o.id !== a.id && o.state === 'active' && w.dist(o.x, o.y, a.x, a.y) <= w.sight(o) && !w.knowsRecipe(o, name)) w.learn(o, 'recipe:' + name);
-      return { ok: true, text: `${invented ? `It works! You've found how to make a ${name}. ` : ''}You crafted a ${name} (#${id}): ${r.does}.`, data: { id } };
+      const name = String(x.recipe ?? '').toLowerCase(), r = RECIPES[name];
+      if (!r || !w.knowsRecipe(a, name)) { const known = Object.keys(RECIPES).filter(k => w.knowsRecipe(a, k)); throw new Error(`You don't know how to make "${x.recipe ?? ''}". ${known.length ? `Recipes you know: ${known.join(', ')}.` : "You don't know any recipes yet: you learn them by seeing what they're made of."}`); }
+      const short = Object.entries(r.needs).filter(([m, n]) => (a.mats[m] ?? 0) < n!).map(([m, n]) => `${n! - (a.mats[m] ?? 0)} more ${m}`);
+      if (short.length) throw new Error(`You need ${short.join(', ')}.`);
+      w.need(a, 3);
+      const id = 'i' + (w.seq + 1);
+      w.emit('craft', a.id, { id, kind: 'tool', title: name, body: r.does, hash: sha(name), needs: r.needs, cost: 3 });
+      return { ok: true, text: `You crafted a ${name} (#${id}): ${r.does}.`, data: { id } };
     },
   },
   inspect: {
@@ -821,7 +794,6 @@ export const VERBS: Record<string, Verb> = {
           const inside = w.itemsAt({ o: it.id });
           s += `\n---\nholds: ${fmtMats(it.mats!) || 'no materials'}${inside.length ? '; ' + inside.map(i => `#${i.id} "${i.title}"`).join(', ') : ''}\nstate: ${clampStr(JSON.stringify(it.state), 2000)}`;
         }
-        if (it.kind === 'tool' && RECIPES[it.title] && w.learn(a, 'recipe:' + it.title)) s += `\n---\nLooking it over, you see how it is made: ${w.recipeText(it.title)}.`;
         return { ok: true, text: s };
       }
       if (x.animal) {
@@ -835,8 +807,7 @@ export const VERBS: Record<string, Verb> = {
         const seen = w.dist(a.x, a.y, b.x, b.y) <= w.sight(a);
         const made = [...w.items.values()].filter(i => i.author === b.id).slice(-15);
         const carried = seen ? w.itemsAt({ a: b.id }).filter(i => i.kind === 'tool').map(i => i.title) : [];
-        const learnt = w.dist(a.x, a.y, b.x, b.y) <= 1 ? carried.filter(t => RECIPES[t] && w.learn(a, 'recipe:' + t)) : []; // up close, you can see how their tools are made
-        return { ok: true, text: `${b.name} (${b.state})${seen ? `, ${rel(a, b.x, b.y)}${carried.length ? `, carrying ${carried.join(', ')}` : ''}` : ', not in sight'}. Here since ${ago(w, b.joined)}. Made: ${made.map(i => `#${i.id} "${i.title}"`).join(', ') || 'nothing yet'}.${learnt.length ? ` Up close you see how their ${learnt.join(' and ')} ${learnt.length > 1 ? 'are' : 'is'} made: ${learnt.map(t => w.recipeText(t)).join('; ')}.` : ''}` };
+        return { ok: true, text: `${b.name} (${b.state})${seen ? `, ${rel(a, b.x, b.y)}${carried.length ? `, carrying ${carried.join(', ')}` : ''}` : ', not in sight'}. Here since ${ago(w, b.joined)}. Made: ${made.map(i => `#${i.id} "${i.title}"`).join(', ') || 'nothing yet'}.` };
       }
       const [tx, ty] = w.target(a, x);
       if (w.dist(a.x, a.y, tx, ty) > w.sight(a)) throw new Error("You can't see that far.");
@@ -988,7 +959,7 @@ export function rulesText(cfg: Config) {
     ...(cfg.safeRadius > 0 ? [`- There is safe ground within ${cfg.safeRadius} tiles of the landing place; nobody can be harmed there.`] : []),
     `- Building needs only materials, no tools. A closed room (walls and doors all round, with a roof over every tile inside) is shelter: wolves can't reach you there, and you recover vigor three times as fast. By a burning campfire you recover twice as fast and wolves keep away.`,
     `- At most two people fit on one tile, so sheltering many takes a bigger room. Heavy blocks take two to lift.`,
-    ...(cfg.discovery ? [`- Everyone arrives knowing a few basic tool recipes and one more of their own. Others are learned: by examining a tool, by watching someone make one, or by research (trying exact combinations of materials; failed tries spoil common materials, never rare ones). Blocks from common materials everyone knows; finer ones become clear once you hold what they need.`] : []),
+    ...(cfg.discovery ? [`- You know how to make a tool or a block once you have seen every material it needs: in sight, on the ground, or in your hands. So the farther you go, the more you can make.`] : []),
     `- There is no quick way to travel: every tile is walked (or swum, or sailed). Wherever you are, you have to get back on your own feet.`,
     `- You don't know coordinates unless you carry the right tool. Directions are relative: N is up, E is right.`,
     cfg.dayMin === 1440 ? `- Days follow real time in UTC: morning from ${utcHour(cfg, 0)}, midday from ${utcHour(cfg, 0.25)}, evening from ${utcHour(cfg, 0.5)}, night from ${utcHour(cfg, 0.75)} until dawn. At night you see less, and wolves roam.`
@@ -1059,6 +1030,11 @@ export function observe(w: World, a: Agent, detail = 1): string {
     const d = w.depositAt(x, y); if (!d.m || !d.rich || d.amt <= 0) continue;
     const dd = w.dist(a.x, a.y, x, y), cur = nearest.get(d.m); if (!cur || dd < cur[2]) nearest.set(d.m, [x, y, dd]);
   }
+  // seeing new materials teaches what can be made from them
+  { const seenNow = new Set<string>([...nearest.keys()].map(String)); for (const [m, n] of Object.entries(a.mats)) if (n > 0) seenNow.add(m);
+    for (let j = -r; j <= r; j++) for (let i = -r; i <= r; i++) { const g = w.ground.get(key(a.x + i, a.y + j)); if (g && w.dist(a.x, a.y, a.x + i, a.y + j) <= r) for (const [m, n] of Object.entries(g)) if (n > 0) seenNow.add(m); }
+    const got = w.notice(a, seenNow);
+    if (got.recipes.length || got.blocks.length) out.push(`Seeing ${got.mats.join(' and ')} for the first time, you realise you could make ${[...got.recipes.map(k => `a ${w.recipeText(k)}`), ...got.blocks.map(k => w.blockText(k))].join('; ')}.`); }
   if (nearest.size) out.push(`Deposits in sight: ${[...nearest].sort((p, q) => p[1][2] - q[1][2]).map(([m, [x, y]]) => `${m === 'food' ? 'food (berries)' : m} ${rel(a, x, y)}`).join('; ')}.`);
   if (nearItems.length) out.push(`Items in sight: ${nearItems.slice(0, detail >= 2 ? 50 : 10).join('; ')}.`);
   if (detail >= 1) {

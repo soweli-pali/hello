@@ -235,7 +235,7 @@ export function bot(c: AgentConf): Provider {
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) plan.push({ dx, dy, block: 'ROOF' });
       return act('say', { text: pick(['time to build', 'this looks like a good spot for a house', 'building here']) });
     }
-    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { with: needs }); // bots find recipes the same way anyone can: by trying the materials together
+    for (const [t, needs] of BOT_CRAFTS) if (!tools.has(t) && Object.entries(needs).every(([m, n]) => (mats[m] ?? 0) >= n)) return act('craft', { recipe: t }); // a bot holding the materials has seen them, so it knows the recipe
     // gather with purpose: building stuff, a little food, and whatever the next tool needs
     const dep = /(\w+) ([1-9]\d*)\/\d/.exec(here)?.[1];
     const useful = dep && (['stone', 'wood', 'clay', 'sand'].includes(dep) || (dep === 'food' && (mats.food ?? 0) < 4) || (dep === 'fiber' && (mats.fiber ?? 0) < 4));
